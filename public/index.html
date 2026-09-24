@@ -45,8 +45,8 @@
       <main class="workspace">
         <header class="topbar">
           <div class="topbar-left">
-            <button class="icon-button mobile-menu" id="menuButton" aria-label="打开侧栏" type="button">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16" /></svg>
+            <button class="icon-button sidebar-toggle" id="menuButton" aria-label="收起会话栏" title="收起会话栏" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16" /></svg>
             </button>
             <div class="page-heading">
               <span class="eyebrow">工作台 / 对话</span>
@@ -127,7 +127,7 @@
         <aside class="blackboard-panel" id="blackboardPanel" aria-label="PDF Blackboard">
           <div class="board-header">
             <div><span class="board-eyebrow">DOCUMENT INTELLIGENCE</span><h2>Blackboard</h2></div>
-            <span class="board-spark" aria-hidden="true">✦</span>
+            <div class="panel-header-actions"><span class="board-spark" aria-hidden="true">✦</span><button class="panel-close" data-close-panel type="button" aria-label="收起 Blackboard" title="收起工作台">×</button></div>
           </div>
           <p class="board-subtitle">模型笔记仅供定位。点击页码回看原图，核实具体内容。</p>
           <div class="board-documents" id="boardDocuments"></div>
@@ -145,13 +145,13 @@
           </div>
         </aside>
         <aside class="meeting-panel" id="meetingPanel" aria-label="会议分析">
-          <div class="meeting-header"><span class="board-eyebrow">MEETING WORKFLOW</span><h2>会议工作台</h2></div>
+          <div class="meeting-header"><div><span class="board-eyebrow">MEETING WORKFLOW</span><h2>会议工作台</h2></div><button class="panel-close" data-close-panel type="button" aria-label="收起会议工作台" title="收起工作台">×</button></div>
           <p class="board-subtitle">会议只依据 TXT 分析。风险与待办可按原文行号核对。</p>
           <div class="meeting-list" id="meetingList"></div>
           <div class="meeting-content" id="meetingContent"><div class="board-empty"><strong>还没有会议</strong><p>在对话框上传会议 TXT，Agent 会提交后台分析。</p></div></div>
         </aside>
         <aside class="ppt-panel" id="pptPanel" aria-label="PPT 制作">
-          <div class="meeting-header"><span class="board-eyebrow">PRESENTATION WORKFLOW</span><h2>PPT 工作台</h2></div>
+          <div class="meeting-header"><div><span class="board-eyebrow">PRESENTATION WORKFLOW</span><h2>PPT 工作台</h2></div><button class="panel-close" data-close-panel type="button" aria-label="收起 PPT 工作台" title="收起工作台">×</button></div>
           <p class="board-subtitle">在对话中说明主题、受众和页数。后台制作完成后可下载可编辑 PPTX。</p>
           <div class="meeting-list" id="pptList"></div>
           <div class="meeting-content" id="pptContent"><div class="board-empty"><strong>还没有 PPT</strong><p>试着说：“用项目背景和会议结果做 6 页汇报 PPT。”</p></div></div>

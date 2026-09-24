@@ -70,6 +70,7 @@ const state = {
   thinkingLevel: localStorage.getItem("demoThinkingLevel") || "off",
   thinkingLevels: ["off"],
   sessions: [],
+  memoryHistory: [],
   attachments: [],
   documents: [],
   meetings: [],
@@ -92,6 +93,9 @@ const state = {
   toastTimer: null,
   pollTimer: null,
 };
+
+if (localStorage.getItem("demoSidebarCollapsed") === "true") document.body.classList.add("sidebar-collapsed");
+if (window.matchMedia("(min-width: 1101px)").matches) document.body.classList.add("board-open");
 
 async function api(path, options) {
   const response = await fetch(path, options);
@@ -126,6 +130,32 @@ function renderContext(context) {
 
 function closeSidebar() {
   document.body.classList.remove("sidebar-open");
+  updateSidebarToggle();
+}
+
+function updateSidebarToggle() {
+  const mobile = window.matchMedia("(max-width: 700px)").matches;
+  const closed = mobile ? !document.body.classList.contains("sidebar-open") : document.body.classList.contains("sidebar-collapsed");
+  const label = closed ? "展开会话栏" : "收起会话栏";
+  elements.menuButton.setAttribute("aria-label", label);
+  elements.menuButton.title = label;
+  elements.menuButton.setAttribute("aria-expanded", String(!closed));
+}
+
+function syncPanelToggles() {
+  for (const [button, className] of [[elements.boardToggle, "board-open"],
+    [elements.meetingToggle, "meeting-open"], [elements.pptToggle, "ppt-open"]]) {
+    const open = document.body.classList.contains(className);
+    button.classList.toggle("active", open);
+    button.setAttribute("aria-pressed", String(open));
+  }
+}
+
+function togglePanel(className) {
+  const open = !document.body.classList.contains(className);
+  document.body.classList.remove("board-open", "meeting-open", "ppt-open");
+  if (open) document.body.classList.add(className);
+  syncPanelToggles();
 }
 
 function isNearBottom(node, threshold = 48) {
@@ -825,6 +855,7 @@ async function followSlot(event, sessionId) {
     document.body.classList.add("ppt-open");
     document.body.classList.remove("board-open", "meeting-open");
   }
+  syncPanelToggles();
 }
 
 function updateTextareaHeight() {
@@ -942,6 +973,39 @@ function addTool(name, stateText) {
   return status;
 }
 
+function addMemoryChange(change) {
+  const sections = { people: "人物", events: "时间与事件", places: "地点", topics: "主题" };
+  const actions = { add: "新增", update: "修改", delete: "删除", merge: "合并" };
+  const card = document.createElement("details");
+  card.className = "memory-change";
+  card.open = true;
+  card.dataset.version = String(change.version);
+  const summary = document.createElement("summary");
+  summary.textContent = `记忆已更新 · ${actions[change.op] || change.op}${sections[change.section] || ""} · ${change.actor === "background" ? "后台整理" : "主 Agent"}`;
+  const body = document.createElement("div");
+  body.className = "memory-change-body";
+  for (const entry of [change.before, change.merged]) {
+    if (entry) body.append(boardNode("p", "memory-change-line removed", `- ${entry.text}`));
+  }
+  if (change.entry) body.append(boardNode("p", "memory-change-line added", `+ ${change.entry.text}`));
+  const source = change.source?.kind === "meeting"
+    ? `会议原文 L${(change.source.lines || []).join("、L")}` : "对话中的用户信息";
+  body.append(boardNode("small", "", `来源：${source}`));
+  card.append(summary, body);
+  elements.messages.append(card);
+  updateEmptyState();
+  scrollToBottom();
+}
+
+async function refreshMemory(id) {
+  const result = await api(`/api/memory?session_id=${encodeURIComponent(id)}`);
+  if (state.activeId !== id) return;
+  const prior = new Set(state.memoryHistory.map((item) => item.version));
+  const current = result.history.slice().reverse();
+  state.memoryHistory = current;
+  for (const change of current) if (!prior.has(change.version)) addMemoryChange(change);
+}
+
 function renderHistory(messages, preserveScroll = false) {
   const previousTop = elements.conversation.scrollTop;
   const wasFollowing = state.followConversation;
@@ -953,7 +1017,12 @@ function renderHistory(messages, preserveScroll = false) {
   state.completedAssistantMessages.set(state.activeId, completed);
   if (!preserveScroll) state.followConversation = true;
   elements.messages.replaceChildren();
-  for (let message of messages) {
+  const timeline = [...messages.map((message) => ({ kind: "message", at: new Date(message.timestamp).getTime(), value: message })),
+    ...state.memoryHistory.map((change) => ({ kind: "memory", at: new Date(change.at).getTime(), value: change }))]
+    .sort((a, b) => a.at - b.at);
+  for (const item of timeline) {
+    if (item.kind === "memory") { addMemoryChange(item.value); continue; }
+    let message = item.value;
     if (message.role === "user" || message.role === "assistant") {
       if (message.role === "assistant" && !message.text && !message.thinking && !message.error) continue;
       if (message.role === "user") message = { ...message, text: message.text.split(/\n\n\[上传的\s*(?:PDF|会议 TXT)：/)[0] };
@@ -993,6 +1062,8 @@ function renderSessions() {
     return;
   }
   for (const session of state.sessions) {
+    const row = document.createElement("div");
+    row.className = "session-row";
     const button = document.createElement("button");
     button.type = "button";
     button.className = `session-item${session.id === state.activeId ? " active" : ""}`;
@@ -1009,7 +1080,24 @@ function renderSessions() {
     copy.append(title, meta);
     button.append(copy);
     button.addEventListener("click", () => { void loadSession(session.id); });
-    elements.sessionList.append(button);
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "session-delete";
+    remove.textContent = "×";
+    remove.title = `删除对话：${session.title}`;
+    remove.setAttribute("aria-label", remove.title);
+    remove.disabled = session.running;
+    remove.addEventListener("click", async () => {
+      if (!window.confirm(`删除对话“${session.title}”？此操作无法恢复对话记录。`)) return;
+      try {
+        await api(`/api/sessions/${session.id}`, { method: "DELETE" });
+        state.completedAssistantMessages.delete(session.id);
+        if (state.activeId === session.id) newChat();
+        await refreshSessions();
+      } catch (error) { showToast(error.message); }
+    });
+    row.append(button, remove);
+    elements.sessionList.append(row);
   }
 }
 
@@ -1097,8 +1185,11 @@ function connectSessionEvents(id) {
 
 async function loadSession(id) {
   try {
-    const { session } = await api(`/api/sessions/${id}`);
+    const [{ session }, memoryResult] = await Promise.all([
+      api(`/api/sessions/${id}`), api(`/api/memory?session_id=${encodeURIComponent(id)}`),
+    ]);
     state.activeId = id;
+    state.memoryHistory = memoryResult.history.slice().reverse();
     state.manualSlotSelection = false;
     elements.sessionTitle.textContent = session.title;
     renderContext(session.context);
@@ -1126,6 +1217,7 @@ function newChat() {
   state.eventSource?.close();
   state.eventSource = null;
   state.activeId = null;
+  state.memoryHistory = [];
   state.followConversation = true;
   elements.sessionTitle.textContent = "新的对话";
   renderContext(null);
@@ -1434,6 +1526,8 @@ async function stopGeneration() {
 }
 
 async function initialize() {
+  updateSidebarToggle();
+  syncPanelToggles();
   try {
     const [status] = await Promise.all([api("/api/status"), refreshSessions()]);
     state.model = status.model;
@@ -1460,6 +1554,7 @@ setInterval(async () => {
     await refreshMeetings(id);
     await refreshPpts(id);
     if (state.documents.some((document) => document.status === "processing")) await refreshDocuments(id);
+    await refreshMemory(id);
     if (state.localStreamId === id) return;
     const { session } = await api(`/api/sessions/${id}`);
     if (state.activeId !== id) return;
@@ -1483,8 +1578,17 @@ setInterval(async () => {
 }, 2000);
 
 elements.newChatButton.addEventListener("click", newChat);
-elements.menuButton.addEventListener("click", () => document.body.classList.add("sidebar-open"));
+elements.menuButton.addEventListener("click", () => {
+  if (window.matchMedia("(max-width: 700px)").matches) {
+    document.body.classList.toggle("sidebar-open");
+  } else {
+    const collapsed = document.body.classList.toggle("sidebar-collapsed");
+    localStorage.setItem("demoSidebarCollapsed", String(collapsed));
+  }
+  updateSidebarToggle();
+});
 elements.sidebarBackdrop.addEventListener("click", closeSidebar);
+window.addEventListener("resize", updateSidebarToggle);
 elements.composerForm.addEventListener("submit", (event) => { event.preventDefault(); void sendMessage(); });
 elements.conversation.addEventListener("scroll", () => {
   if (!state.renderingHistory) state.followConversation = isNearBottom(elements.conversation);
@@ -1506,19 +1610,22 @@ elements.imageInput.addEventListener("change", () => {
 });
 elements.boardToggle.addEventListener("click", () => {
   state.manualSlotSelection = true;
-  const open = document.body.classList.toggle("board-open");
-  if (open) document.body.classList.remove("meeting-open", "ppt-open");
+  togglePanel("board-open");
 });
 elements.meetingToggle.addEventListener("click", () => {
   state.manualSlotSelection = true;
-  const open = document.body.classList.toggle("meeting-open");
-  if (open) document.body.classList.remove("board-open", "ppt-open");
+  togglePanel("meeting-open");
 });
 elements.pptToggle.addEventListener("click", () => {
   state.manualSlotSelection = true;
-  const open = document.body.classList.toggle("ppt-open");
-  if (open) document.body.classList.remove("board-open", "meeting-open");
+  togglePanel("ppt-open");
 });
+for (const button of document.querySelectorAll("[data-close-panel]")) {
+  button.addEventListener("click", () => {
+    state.manualSlotSelection = true;
+    togglePanel(button.dataset.closePanel);
+  });
+}
 elements.boardSearch.addEventListener("input", () => {
   const query = elements.boardSearch.value.trim();
   const request = ++state.searchRequest;

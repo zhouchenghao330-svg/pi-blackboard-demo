@@ -75,6 +75,7 @@ export async function searchMemory({ meetings, cwd, sessionDir, query, limit = 8
   const [meetingRecords, sessions] = await Promise.all([
     meetings.all(), SessionManager.list(cwd, sessionDir),
   ]);
+  const activeSessionIds = new Set(sessions.map((session) => session.id));
   const conversationEntries = [];
   let unreadableSessions = 0;
   for (const info of sessions) {
@@ -92,5 +93,6 @@ export async function searchMemory({ meetings, cwd, sessionDir, query, limit = 8
   }
   return { warning: "这些是历史会议分析和对话片段，可能包含旧安排、模型表述或后续更正；请按时间和原始行号核对，不能直接视为当前事实。",
     query, unreadable_sessions: unreadableSessions,
-    matches: searchMemoryEntries({ meetingRecords, conversationEntries }, query, limit) };
+    matches: searchMemoryEntries({ meetingRecords: meetingRecords.filter((record) => activeSessionIds.has(record.sessionId)),
+      conversationEntries }, query, limit) };
 }

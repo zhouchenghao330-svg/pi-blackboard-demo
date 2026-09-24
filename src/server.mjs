@@ -11,6 +11,8 @@ import { createMeetingWorkflow } from "./meeting-workflow.mjs";
 import { createPdfService } from "./pdf-service.mjs";
 import { createPptStore } from "./ppt-store.mjs";
 import { createSlotStore } from "./slot-store.mjs";
+import { createLongMemoryStore } from "./long-memory-store.mjs";
+import { createLongMemoryMaintainer } from "./long-memory-maintainer.mjs";
 
 const dataDir = process.env.DEMO_DATA_DIR || "/data";
 const agentDir = process.env.PI_CODING_AGENT_DIR || join(dataDir, "pi-agent");
@@ -24,11 +26,63 @@ const pdfService = createPdfService(documents);
 const meetings = createMeetingStore(dataDir);
 const ppts = createPptStore(dataDir);
 const slots = createSlotStore(dataDir, { documents, meetings, ppts });
+const memory = await createLongMemoryStore(dataDir);
+const memoryMaintainer = await createLongMemoryMaintainer({ dataDir, agentDir, modelId: configuredModel.modelId, memory });
 const meetingWorkflow = await createMeetingWorkflow({ store: meetings, documents, agentDir, modelId: configuredModel.modelId });
-const agent = await createAgentService({ dataDir, agentDir, modelId: configuredModel.modelId, documents, meetings, meetingWorkflow, pdfService, ppts, slots });
-meetingWorkflow.setNotifier(agent.notifyMeeting);
+const agent = await createAgentService({ dataDir, agentDir, modelId: configuredModel.modelId, documents, meetings, meetingWorkflow, pdfService, ppts, slots, memory, memoryMaintainer });
+meetingWorkflow.setNotifier(async (sessionId, jobId) => {
+  const meeting = await meetings.requireMeeting(sessionId, jobId);
+  const results = await Promise.allSettled([
+    agent.notifyMeeting(sessionId, jobId),
+    memoryMaintainer.recordMeeting(meeting),
+  ]);
+  for (const result of results) if (result.status === "rejected") console.error("Meeting completion handler failed:", result.reason);
+});
 await meetingWorkflow.recover();
 void pdfService.recover().catch((error) => console.error("PDF recovery failed:", error));
+let memoryProposalPollRunning = false;
+setInterval(async () => {
+  if (memoryProposalPollRunning) return;
+  memoryProposalPollRunning = true;
+  try {
+    const bySession = new Map();
+    for (const proposal of memoryMaintainer.pendingProposals()) {
+      if (!bySession.has(proposal.sessionId)) bySession.set(proposal.sessionId, []);
+      bySession.get(proposal.sessionId).push(proposal);
+    }
+    for (const [sessionId, proposals] of bySession) {
+      const batch = proposals.slice(0, 12);
+      try {
+        await agent.notifyMemory(sessionId, batch);
+        await memoryMaintainer.markDelivered(batch.map((item) => item.proposalId));
+      } catch (error) {
+        if (error.code === "SESSION_NOT_FOUND") await memoryMaintainer.forgetSession(sessionId);
+        else console.error("Memory proposal delivery failed", error);
+      }
+    }
+  } catch (error) { console.error("Memory proposal poll failed", error); }
+  finally { memoryProposalPollRunning = false; }
+}, 2000);
+let pdfNotificationPollRunning = false;
+setInterval(async () => {
+  if (pdfNotificationPollRunning) return;
+  pdfNotificationPollRunning = true;
+  try {
+    const bySession = new Map();
+    for (const document of await documents.all()) {
+      if (!["ready", "failed"].includes(document.status) || !document.notificationPending) continue;
+      if (!bySession.has(document.sessionId)) bySession.set(document.sessionId, []);
+      bySession.get(document.sessionId).push(document.id);
+    }
+    for (const [sessionId, documentIds] of bySession) {
+      await agent.notifyPdf(sessionId, documentIds);
+      await Promise.all(documentIds.map((documentId) => documents.update(sessionId, documentId, {
+        notificationPending: false, notifiedAt: new Date().toISOString(),
+      })));
+    }
+  } catch (error) { console.error("PDF completion poll failed", error); }
+  finally { pdfNotificationPollRunning = false; }
+}, 2000);
 let pptNotificationPollRunning = false;
 setInterval(async () => {
   if (pptNotificationPollRunning) return;
@@ -130,6 +184,11 @@ async function route(request, response) {
     json(response, 200, { model: agent.model, thinkingLevels: agent.thinkingLevels });
     return;
   }
+  if (method === "GET" && pathname === "/api/memory") {
+    const sessionId = url.searchParams.get("session_id");
+    json(response, 200, { memory: memory.snapshot(), history: memory.history(100, sessionId) });
+    return;
+  }
   if (method === "GET" && pathname === "/api/sessions") {
     json(response, 200, { sessions: await agent.listSessions() });
     return;
@@ -145,6 +204,10 @@ async function route(request, response) {
     if (method === "GET" && parts.length === 3) {
       const session = await agent.getSession(id);
       json(response, session ? 200 : 404, session ? { session } : { error: "会话不存在" });
+      return;
+    }
+    if (method === "DELETE" && parts.length === 3) {
+      json(response, 200, await agent.deleteSession(id));
       return;
     }
     if (method === "GET" && parts[3] === "events" && parts.length === 4) {

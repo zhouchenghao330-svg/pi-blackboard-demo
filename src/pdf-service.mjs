@@ -19,7 +19,8 @@ export function createPdfService(documents, ingestImpl = ingestPdf) {
       const updateProgress = (progress) => {
         for (const listener of listeners) listener(progress);
         progressWrites = progressWrites.then(() => documents.update(sessionId, documentId, {
-          status: progress.phase === "ready" ? "ready" : "processing", ...progress,
+          status: progress.phase === "ready" ? "ready" : "processing",
+          ...(progress.phase === "ready" ? { notificationPending: true } : {}), ...progress,
         }));
       };
       try {
@@ -35,7 +36,9 @@ export function createPdfService(documents, ingestImpl = ingestPdf) {
         return result.board;
       } catch (error) {
         await progressWrites.catch(() => {});
-        await documents.update(sessionId, documentId, { status: "failed", phase: "failed", message: error.message });
+        await documents.update(sessionId, documentId, {
+          status: "failed", phase: "failed", message: error.message, notificationPending: true,
+        });
         for (const listener of listeners) listener({ phase: "failed", message: error.message });
         throw error;
       }
@@ -46,6 +49,20 @@ export function createPdfService(documents, ingestImpl = ingestPdf) {
     finally { if (running.get(documentId) === job) running.delete(documentId); }
   }
 
+  async function submit(sessionId, documentId) {
+    const document = await documents.requireDocument(sessionId, documentId);
+    if (document.status === "ready") return { status: "ready", documentId };
+    if (document.status !== "processing") {
+      await documents.update(sessionId, documentId, {
+        status: "processing", phase: "queued", percent: 0,
+        message: "PDF 解析任务已提交", notificationPending: false,
+      });
+    }
+    if (!running.has(documentId)) void ingest(sessionId, documentId)
+      .catch((error) => console.error(`PDF ingestion failed for ${documentId}:`, error));
+    return { status: "processing", documentId };
+  }
+
   async function recover() {
     for (const document of await documents.all()) {
       if (document.status !== "processing") continue;
@@ -54,5 +71,5 @@ export function createPdfService(documents, ingestImpl = ingestPdf) {
     }
   }
 
-  return { ingest, recover };
+  return { ingest, submit, recover };
 }

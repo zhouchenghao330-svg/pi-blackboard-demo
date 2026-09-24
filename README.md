@@ -1,6 +1,6 @@
 # AI 外脑 Demo
 
-当前可运行的部分是单页对话工作台：Pi SDK 驱动的会话、流式回答、Markdown 展示、图片、PDF 与会议 TXT 输入、联网搜索、思考强度与思考内容展示、停止生成和历史会话恢复。上传 PDF 后，主 Agent 调用 `ingest_pdf` 按页建立 Blackboard；右侧展示解析进度、文档概览、主题导航、关键线索、逐页索引和跨页连接。页面可搜索模型笔记及 PDF 原生文本层，按需打开高清页图，追加人工修正。`get_blackboard` 让 Agent 获取最新索引与修正，`search_pdf_text` 定位文本，`read_pdf_pages` 按物理页码核验原图。上传会议 TXT 后，主 Agent 可用受限的 `read_meeting_file` 阅读原文，再通过 `submit_meeting_analysis` 提交本次审查重点。后台分阶段发现、核验和补漏；会议面板展示进度、行号证据、审查轨迹、风险、两类待办和邮件草稿。完成通知是隐藏的内部 follow-up，主 Agent 再调用 `get_meeting_analysis`；用户消息以 steer 优先进入当前任务。主 Agent 可基于已核验 PDF 原页补充判断并创建或修改邮件草稿。草稿可以清空；邮件须用户确认收件人后才会发送。用户明确要求 PPT 时，主 Agent 可提交后台快速制作任务；独立 Pi 工作会话依照 PPT Master 生成 SVG、检查并导出可编辑 PPTX，前端 PPT 面板显示进度和下载入口。
+当前可运行的部分是单页对话工作台：Pi SDK 驱动的会话、流式回答、Markdown 展示、图片、PDF 与会议 TXT 输入、联网搜索、思考强度与思考内容展示、停止生成和历史会话恢复。上传 PDF 后，主 Agent 调用 `ingest_pdf` 提交后台 Blackboard 解析任务并继续对话；完成或失败后通过隐藏的内部 follow-up 获知结果，再调用 `get_blackboard` 读取持久化状态。右侧展示解析进度、文档概览、主题导航、关键线索、逐页索引和跨页连接。页面可搜索模型笔记及 PDF 原生文本层，按需打开高清页图，追加人工修正。`get_blackboard` 让 Agent 获取最新索引与修正，`search_pdf_text` 定位文本，`read_pdf_pages` 按物理页码核验原图。上传会议 TXT 后，主 Agent 可用受限的 `read_meeting_file` 阅读原文，再通过 `submit_meeting_analysis` 提交本次审查重点。后台分阶段发现、核验和补漏；会议面板展示进度、行号证据、审查轨迹、风险、两类待办和邮件草稿。完成通知是隐藏的内部 follow-up，主 Agent 再调用 `get_meeting_analysis`；用户消息以 steer 优先进入当前任务。主 Agent 可基于已核验 PDF 原页补充判断并创建或修改邮件草稿。草稿可以清空；邮件须用户确认收件人后才会发送。用户明确要求 PPT 时，主 Agent 可提交后台快速制作任务；独立 Pi 工作会话依照 PPT Master 生成 SVG、检查并导出可编辑 PPTX，前端 PPT 面板显示进度和下载入口。
 
 ## 启动
 
@@ -17,7 +17,7 @@ curl http://127.0.0.1:3000/health
 
 思考强度按会话保存，页面提供关闭、极低、低、中、高；回答中的思考内容可展开。默认适配 Qwen + vLLM：`DEMO_MODEL_THINKING_FORMAT=qwen-chat-template` 控制思考开关，`DEMO_MODEL_THINKING_BUDGET_FIELD=thinking_token_budget` 让不同档位使用 Pi 的不同思考 token 预算。换其他模型或服务时，需按其接口调整这两个配置；不支持思考的模型设置 `DEMO_MODEL_REASONING=false`。
 
-容器内的 `/data/uploads`、`/data/outputs`、`/data/meetings` 和 `/data/pi-agent` 由 Compose 的 `demo_data` 卷持久化，Pi 会话位于 `/data/sessions`。PDF 页渲染工具 `pdftoppm` 和 `pdfinfo` 已安装在容器内。
+容器内的 `/data/uploads`、`/data/outputs`、`/data/meetings`、`/data/memory` 和 `/data/pi-agent` 由 Compose 的 `demo_data` 卷持久化，Pi 会话位于 `/data/sessions`。长期记忆按人物、时间与事件、地点、主题维护；主 Agent 可主动逐条修改。后台每 5 个用户轮次及会议分析完成后提出候选操作，由主 Agent 核对后决定是否写入。当前状态、追加历史和候选分别位于 `/data/memory/memory.md`、`/data/memory/history.jsonl`、`/data/memory/proposals.json`，设计见 [docs/long-memory.md](docs/long-memory.md)。对话列表支持删除，会话栏和右侧工作台可收起。PDF 页渲染工具 `pdftoppm` 和 `pdfinfo` 已安装在容器内。
 
 PPT 制作使用独立的 `ppt-worker` 容器，不接收 SMTP 密钥。PPT Master Skill 的完整运行资源固定在 `vendor/ppt-master/skills/ppt-master`，构建时复制进 worker 镜像；来源版本和许可见 `vendor/ppt-master/UPSTREAM.md`。工作目录、任务状态和 PPTX 保存在 Docker 卷的 `/data/ppt-projects` 与 `/data/ppt-jobs`。第一版使用 Quick 路线、2–12 页、无 AI 生图；主 Agent 将已核验的资料交给制作会话，PDF Blackboard 不能直接充当事实依据。下载文件需要制作容器真正完成质量检查和导出。
 

@@ -36,4 +36,34 @@ test("PDF recovery resumes processing and concurrent callers share one ingest", 
   await service.recover();
   assert.equal(calls, 2);
   assert.equal(document.status, "ready");
+  assert.equal(document.notificationPending, true);
+});
+
+test("PDF submission returns before visual reading finishes and persists completion notification", { timeout: 1000 }, async () => {
+  const document = { id: "pdf-2", sessionId: "session-2", name: "背景.pdf", status: "uploaded" };
+  const board = { document: { pageCount: 4 } };
+  let finishReading;
+  const reading = new Promise((resolve) => { finishReading = resolve; });
+  const documents = {
+    async requireDocument() { return { ...document }; },
+    async update(_sessionId, _id, changes) { Object.assign(document, changes); return { ...document }; },
+    async board() { return board; },
+    sourcePath() { return "/tmp/source.pdf"; },
+    outputPath() { return "/tmp/output"; },
+  };
+  const service = createPdfService(documents, async ({ onProgress }) => {
+    await reading;
+    onProgress({ phase: "ready", percent: 100 });
+    return { board };
+  });
+
+  const submitted = await service.submit(document.sessionId, document.id);
+  assert.deepEqual(submitted, { status: "processing", documentId: document.id });
+  assert.equal(document.status, "processing");
+  assert.equal(document.notificationPending, false);
+
+  finishReading();
+  assert.equal(await service.ingest(document.sessionId, document.id), board);
+  assert.equal(document.status, "ready");
+  assert.equal(document.notificationPending, true);
 });

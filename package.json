@@ -1,0 +1,17 @@
+{
+  "name": "ai-external-brain-demo",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.mjs"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "0.87.1",
+    "markdown-it": "15.0.2",
+    "typebox": "1.3.27"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  }
+}

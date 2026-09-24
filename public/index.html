@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#17252b" />
+    <title>外脑 · 对话工作台</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <script type="module" src="/app.js"></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" id="sidebar">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></div>
+          <div>
+            <div class="brand-name">外脑</div>
+            <div class="brand-subtitle">AI WORKSPACE</div>
+          </div>
+        </div>
+
+        <button class="new-chat-button" id="newChatButton" type="button">
+          <span class="plus-icon" aria-hidden="true">+</span>
+          <span>新建对话</span>
+          <span class="new-chat-shortcut">⌘ K</span>
+        </button>
+
+        <div class="sidebar-section-heading">
+          <span>最近对话</span>
+          <span id="sessionCount">0</span>
+        </div>
+        <nav class="session-list" id="sessionList" aria-label="最近对话"></nav>
+
+        <div class="sidebar-footer">
+          <div class="sidebar-footer-icon" aria-hidden="true">P</div>
+          <div class="sidebar-footer-text">
+            <strong>Pi Agent</strong>
+            <span>会话与工具由 Pi 驱动</span>
+          </div>
+          <span class="live-dot" aria-hidden="true"></span>
+        </div>
+      </aside>
+      <button class="sidebar-backdrop" id="sidebarBackdrop" aria-label="关闭侧栏" type="button"></button>
+
+      <main class="workspace">
+        <header class="topbar">
+          <div class="topbar-left">
+            <button class="icon-button mobile-menu" id="menuButton" aria-label="打开侧栏" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16" /></svg>
+            </button>
+            <div class="page-heading">
+              <span class="eyebrow">工作台 / 对话</span>
+              <h1 id="sessionTitle">新的对话</h1>
+            </div>
+          </div>
+          <div class="topbar-right">
+            <button class="board-toggle" id="boardToggle" type="button" aria-label="切换 Blackboard 面板">Blackboard</button>
+            <span class="connection-pill" id="connectionPill"><span></span><span id="connectionText">连接中</span></span>
+            <span class="model-pill" id="modelPill">模型加载中</span>
+          </div>
+        </header>
+
+        <div class="workbench">
+        <section class="chat-layout" aria-label="对话内容">
+          <div class="conversation" id="conversation">
+            <div class="conversation-inner">
+              <div class="empty-state" id="emptyState">
+                <div class="empty-symbol" aria-hidden="true"><span></span><span></span><span></span></div>
+                <p class="empty-kicker">你的工作思考空间</p>
+                <h2>从一个问题开始。</h2>
+                <p class="empty-description">上传 PDF 建立可回查的背景索引，或直接开始对话。对话和文档会自动保存。</p>
+                <div class="starter-grid">
+                  <button class="starter-card" data-prompt="帮我梳理一个项目启动会需要确认的问题。" type="button">
+                    <span class="starter-number">01</span>
+                    <span>梳理项目启动会的问题</span>
+                    <span class="starter-arrow" aria-hidden="true">↗</span>
+                  </button>
+                  <button class="starter-card" data-prompt="帮我把一个模糊的工作目标拆成可执行的步骤。" type="button">
+                    <span class="starter-number">02</span>
+                    <span>拆解工作目标</span>
+                    <span class="starter-arrow" aria-hidden="true">↗</span>
+                  </button>
+                </div>
+              </div>
+              <div class="messages" id="messages" aria-live="polite"></div>
+            </div>
+          </div>
+
+          <div class="composer-area">
+            <div class="composer-inner">
+              <div class="attachment-list" id="attachmentList" hidden></div>
+              <form class="composer" id="composerForm">
+                <label class="sr-only" for="messageInput">输入消息</label>
+                <textarea id="messageInput" rows="1" placeholder="输入消息，开始对话…" maxlength="12000"></textarea>
+                <div class="composer-actions">
+                  <div class="composer-actions-left">
+                    <button class="attach-button" id="attachButton" type="button" aria-label="添加图片或 PDF" title="添加图片或 PDF">
+                      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 11.5 12 20a6 6 0 0 1-8.5-8.5l9-9a4 4 0 0 1 5.7 5.7l-9.1 9.1a2 2 0 0 1-2.8-2.8l8.4-8.4" /></svg>
+                    </button>
+                    <input id="imageInput" type="file" accept="image/png,image/jpeg,image/webp,image/gif,application/pdf,.pdf" multiple hidden />
+                    <span class="composer-hint">图片或 PDF</span>
+                    <label class="thinking-control" for="thinkingSelect">
+                      <span>思考强度</span>
+                      <select id="thinkingSelect" aria-label="思考强度" disabled>
+                        <option value="off">关闭</option>
+                      </select>
+                    </label>
+                  </div>
+                  <button class="send-button" id="sendButton" type="submit" aria-label="发送消息">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6" /></svg>
+                  </button>
+                  <button class="stop-button" id="stopButton" type="button" aria-label="停止生成" hidden>
+                    <span aria-hidden="true"></span> 停止生成
+                  </button>
+                </div>
+              </form>
+              <p class="composer-note">Enter 发送 · Shift + Enter 换行 <span>回答可能有误，请核对重要信息</span></p>
+            </div>
+          </div>
+        </section>
+        <aside class="blackboard-panel" id="blackboardPanel" aria-label="PDF Blackboard">
+          <div class="board-header">
+            <div><span class="board-eyebrow">DOCUMENT INTELLIGENCE</span><h2>Blackboard</h2></div>
+            <span class="board-spark" aria-hidden="true">✦</span>
+          </div>
+          <p class="board-subtitle">模型笔记仅供定位。点击页码回看原图，核实具体内容。</p>
+          <div class="board-documents" id="boardDocuments"></div>
+          <div class="board-search">
+            <input id="boardSearch" type="search" placeholder="搜索术语、Fig. 4、Table 2…" aria-label="搜索 Blackboard 和 PDF 文本层" disabled />
+            <span aria-hidden="true">⌕</span>
+          </div>
+          <div class="board-search-meta" id="boardSearchMeta" hidden></div>
+          <div class="board-progress" id="boardProgress" hidden>
+            <div class="board-progress-heading"><span id="boardProgressText">准备解析</span><strong id="boardProgressPercent">0%</strong></div>
+            <div class="board-progress-track" role="progressbar" aria-label="PDF 解析进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="boardProgressBar"><span id="boardProgressFill"></span></div>
+          </div>
+          <div class="board-content" id="boardContent">
+            <div class="board-empty"><div class="board-empty-icon">▤</div><strong>还没有文档</strong><p>在对话框上传 PDF，Agent 会生成带页码的 Blackboard。</p></div>
+          </div>
+        </aside>
+        </div>
+      </main>
+    </div>
+    <dialog class="page-viewer" id="pageViewer" aria-label="PDF 高清页图">
+      <div class="page-viewer-bar">
+        <strong id="pageViewerTitle">PDF 原页</strong>
+        <div>
+          <button id="pageViewerZoom" type="button">实际尺寸</button>
+          <button id="pageViewerClose" type="button" aria-label="关闭页图">关闭</button>
+        </div>
+      </div>
+      <div class="page-viewer-stage" id="pageViewerStage"><img id="pageViewerImage" alt="" /></div>
+    </dialog>
+    <div class="toast" id="toast" role="status" hidden></div>
+  </body>
+</html>

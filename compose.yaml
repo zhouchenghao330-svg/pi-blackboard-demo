@@ -1,0 +1,29 @@
+services:
+  app:
+    build: .
+    init: true
+    ports:
+      - "127.0.0.1:${DEMO_PORT:-3000}:3000"
+    environment:
+      PORT: "3000"
+      PI_CODING_AGENT_DIR: /data/pi-agent
+      DEMO_DATA_DIR: /data
+      DEMO_MODEL_BASE_URL: ${DEMO_MODEL_BASE_URL:-}
+      DEMO_MODEL_ID: ${DEMO_MODEL_ID:-}
+      DEMO_MODEL_API: ${DEMO_MODEL_API:-openai-completions}
+      DEMO_MODEL_API_KEY: ${DEMO_MODEL_API_KEY:-}
+      DEMO_MODEL_VISION: ${DEMO_MODEL_VISION:-true}
+      DEMO_MODEL_REASONING: ${DEMO_MODEL_REASONING:-true}
+      DEMO_MODEL_THINKING_FORMAT: ${DEMO_MODEL_THINKING_FORMAT:-qwen-chat-template}
+      DEMO_MODEL_THINKING_BUDGET_FIELD: ${DEMO_MODEL_THINKING_BUDGET_FIELD:-thinking_token_budget}
+    volumes:
+      - demo_data:/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/health').then(r => { if (!r.ok) process.exit(1) }).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  demo_data:

@@ -10,6 +10,7 @@ import { createMeetingStore } from "./meeting-store.mjs";
 import { createMeetingWorkflow } from "./meeting-workflow.mjs";
 import { createPdfService } from "./pdf-service.mjs";
 import { createPptStore } from "./ppt-store.mjs";
+import { createSlotStore } from "./slot-store.mjs";
 
 const dataDir = process.env.DEMO_DATA_DIR || "/data";
 const agentDir = process.env.PI_CODING_AGENT_DIR || join(dataDir, "pi-agent");
@@ -22,20 +23,24 @@ const documents = createDocumentStore(dataDir);
 const pdfService = createPdfService(documents);
 const meetings = createMeetingStore(dataDir);
 const ppts = createPptStore(dataDir);
+const slots = createSlotStore(dataDir, { documents, meetings, ppts });
 const meetingWorkflow = await createMeetingWorkflow({ store: meetings, documents, agentDir, modelId: configuredModel.modelId });
-const agent = await createAgentService({ dataDir, agentDir, modelId: configuredModel.modelId, documents, meetings, meetingWorkflow, pdfService, ppts });
+const agent = await createAgentService({ dataDir, agentDir, modelId: configuredModel.modelId, documents, meetings, meetingWorkflow, pdfService, ppts, slots });
 meetingWorkflow.setNotifier(agent.notifyMeeting);
 await meetingWorkflow.recover();
 void pdfService.recover().catch((error) => console.error("PDF recovery failed:", error));
-const notifiedPpts = new Set((await ppts.all()).filter((job) => ["ready", "failed"].includes(job.status)).map((job) => job.id));
+let pptNotificationPollRunning = false;
 setInterval(async () => {
+  if (pptNotificationPollRunning) return;
+  pptNotificationPollRunning = true;
   try {
     for (const job of await ppts.all()) {
-      if (!["ready", "failed"].includes(job.status) || notifiedPpts.has(job.id)) continue;
-      notifiedPpts.add(job.id);
+      if (!["ready", "failed"].includes(job.status) || !job.notificationPending) continue;
       await agent.notifyPpt(job.sessionId, job.id);
+      await ppts.update(job.id, { notificationPending: false, notifiedAt: new Date().toISOString() });
     }
   } catch (error) { console.error("PPT completion poll failed", error); }
+  finally { pptNotificationPollRunning = false; }
 }, 2000);
 const publicDir = fileURLToPath(new URL("../public/", import.meta.url));
 const port = Number(process.env.PORT || 3000);
@@ -169,6 +174,11 @@ async function route(request, response) {
       json(response, 200, { documents: await documents.list(id) });
       return;
     }
+    if (method === "GET" && parts[3] === "slots" && parts.length === 4) {
+      if (!await agent.getSession(id)) { json(response, 404, { error: "会话不存在" }); return; }
+      json(response, 200, { slots: await slots.sync(id) });
+      return;
+    }
     if (method === "GET" && parts[3] === "meetings" && parts.length === 4) {
       if (!await agent.getSession(id)) { json(response, 404, { error: "会话不存在" }); return; }
       const items = await meetings.list(id);
@@ -182,7 +192,9 @@ async function route(request, response) {
     }
     if (method === "POST" && parts[3] === "ppts" && parts.length === 4) {
       if (!await agent.getSession(id)) { json(response, 404, { error: "会话不存在" }); return; }
-      json(response, 202, { job: presentPpt(await ppts.submit(id, await readJson(request))) });
+      const job = await ppts.submit(id, await readJson(request));
+      await slots.sync(id);
+      json(response, 202, { job: presentPpt(job) });
       return;
     }
     if (method === "GET" && parts[3] === "ppts" && /^[0-9a-f-]{36}$/i.test(parts[4] || "") && parts.length === 5) {
@@ -211,6 +223,7 @@ async function route(request, response) {
       const name = decodeURIComponent(request.headers["x-file-name"] || "会议原文.txt");
       const meetingTime = request.headers["x-meeting-time"] || null;
       const meeting = await meetings.upload(id, request, name, meetingTime);
+      await slots.sync(id);
       json(response, 201, { meeting: { ...meeting, rawText: undefined } });
       return;
     }
@@ -220,7 +233,15 @@ async function route(request, response) {
       return;
     }
     if (parts[3] === "meetings" && /^[0-9a-f-]{36}$/i.test(parts[4] || "") && parts[5] === "submit" && parts.length === 6 && method === "POST") {
-      json(response, 202, await meetingWorkflow.submit(id, parts[4], await readJson(request)));
+      const job = await meetingWorkflow.submit(id, parts[4], await readJson(request));
+      await slots.sync(id);
+      json(response, 202, job);
+      return;
+    }
+    if (parts[3] === "meetings" && /^[0-9a-f-]{36}$/i.test(parts[4] || "") && parts[5] === "todos" &&
+        /^(explicit|suggested)-\d+$/.test(parts[6] || "") && parts.length === 7 && method === "PATCH") {
+      const todo = await meetingWorkflow.updateTodo(id, parts[4], parts[6], await readJson(request));
+      json(response, 200, { todo });
       return;
     }
     if (parts[3] === "meetings" && /^[0-9a-f-]{36}$/i.test(parts[4] || "") && parts[5] === "email" && parts[6] === "undelivered" && parts.length === 7 && method === "POST") {
@@ -230,19 +251,21 @@ async function route(request, response) {
       return;
     }
     if (parts[3] === "meetings" && /^[0-9a-f-]{36}$/i.test(parts[4] || "") && parts[5] === "email" && parts[6] === "send" && parts.length === 7 && method === "POST") {
-      const { recipient } = await readJson(request);
-      json(response, 200, await meetingWorkflow.send(id, parts[4], recipient));
+      const { recipient, expected_draft_version } = await readJson(request);
+      json(response, 200, await meetingWorkflow.send(id, parts[4], recipient, expected_draft_version));
       return;
     }
     if (parts[3] === "meetings" && /^[0-9a-f-]{36}$/i.test(parts[4] || "") && parts[5] === "email" && parts[6] === "draft" && parts.length === 7 && method === "PUT") {
-      const { subject, body } = await readJson(request);
-      json(response, 200, { email: await meetingWorkflow.updateDraft(id, parts[4], subject, body) });
+      const { subject, body, expected_draft_version } = await readJson(request);
+      json(response, 200, { email: await meetingWorkflow.updateDraft(id, parts[4], subject, body, undefined, expected_draft_version) });
       return;
     }
     if (method === "POST" && parts[3] === "documents" && parts.length === 4) {
       if (!await agent.getSession(id)) { json(response, 404, { error: "会话不存在" }); return; }
       const name = decodeURIComponent(request.headers["x-file-name"] || "未命名 PDF");
-      json(response, 201, { document: await documents.upload(id, request, name) });
+      const document = await documents.upload(id, request, name);
+      await slots.sync(id);
+      json(response, 201, { document });
       return;
     }
     if (parts[3] === "documents" && /^[0-9a-f-]{36}$/i.test(parts[4] || "") && method === "GET") {

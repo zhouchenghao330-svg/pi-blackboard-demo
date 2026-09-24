@@ -56,6 +56,7 @@ export function createPptStore(dataDir) {
       return save({
         id, sessionId, brief, sourceMaterial, pageCount,
         status: "queued", progress: 0, pagesCreated: 0,
+        notificationPending: false, notifiedAt: null,
         createdAt: now, updatedAt: now, outputPath: null, error: null,
       });
     },
@@ -64,8 +65,11 @@ export function createPptStore(dataDir) {
       const pending = previous.catch(() => {}).then(async () => {
         const current = await get(id);
         if (!current) throw new Error("PPT 任务不存在");
-        if (["ready", "failed"].includes(current.status) && changes.status !== current.status) return current;
-        return save({ ...current, ...changes, updatedAt: new Date().toISOString() });
+        if (["ready", "failed"].includes(current.status) && changes.status && changes.status !== current.status) return current;
+        const becameTerminal = !["ready", "failed"].includes(current.status) && ["ready", "failed"].includes(changes.status);
+        return save({ ...current, ...changes,
+          ...(becameTerminal ? { notificationPending: true, notifiedAt: null } : {}),
+          updatedAt: new Date().toISOString() });
       });
       updates.set(id, pending);
       try { return await pending; }

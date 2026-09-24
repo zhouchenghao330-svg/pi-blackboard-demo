@@ -116,9 +116,10 @@ export function createMeetingStore(dataDir) {
       const pending = previous.catch(() => {}).then(async () => {
         const current = await requireMeeting(sessionId, id);
         const now = new Date().toISOString();
-        const record = { ...current, ...changes, updatedAt: now };
-        if (changes.status && changes.status !== current.status) {
-          record.history = [...current.history, { status: changes.status, at: now }];
+        const patch = typeof changes === "function" ? changes(current) : changes;
+        const record = { ...current, ...patch, updatedAt: now };
+        if (patch.status && patch.status !== current.status) {
+          record.history = [...current.history, { status: patch.status, at: now }];
         }
         return save(record);
       });

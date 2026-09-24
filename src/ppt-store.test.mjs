@@ -19,6 +19,12 @@ test("PPT tasks belong to their session and keep a finished state", async () => 
     ]);
     assert.equal((await store.requireJob("session-a", job.id)).pagesCreated, 2);
     await store.update(job.id, { status: "ready", progress: 100 });
+    assert.equal((await store.requireJob("session-a", job.id)).notificationPending, true);
+    const notifiedAt = new Date().toISOString();
+    await store.update(job.id, { notificationPending: false, notifiedAt });
+    const reopened = createPptStore(directory);
+    assert.equal((await reopened.requireJob("session-a", job.id)).notificationPending, false);
+    assert.equal((await reopened.requireJob("session-a", job.id)).notifiedAt, notifiedAt);
     await store.update(job.id, { status: "generating", progress: 60 });
     assert.equal((await store.requireJob("session-a", job.id)).status, "ready");
     await assert.rejects(store.submit("session-a", { brief: "", page_count: 6 }), /需要明确主题/);

@@ -77,8 +77,15 @@ async function work(job, modelRuntime, model) {
 
     const svgCount = (await readdir(join(projectPath, "svg_output"))).filter((name) => name.endsWith(".svg")).length;
     if (svgCount !== job.pageCount) throw new Error(`实际生成 ${svgCount} 页，与要求的 ${job.pageCount} 页不一致`);
+    await store.update(job.id, { status: "checking", progress: 85, pagesCreated: svgCount });
+    await runScript("svg_quality_checker.py", [projectPath, "--quick-generate", "--canonical-authoring", "--stage", "final", "--json"]);
     const report = JSON.parse(await readFile(join(projectPath, "validation", "svg_quality_report.json"), "utf8"));
-    if (report.stage !== "final" || report.summary?.errors) throw new Error("PPT Master 最终质量检查未通过");
+    if (report.schema !== "ppt-master.svg-quality-report.v1" || report.stage !== "final" ||
+        report.categories?.blocking?.count !== 0 || report.source_fingerprint?.file_count !== svgCount) {
+      throw new Error("PPT Master 最终质量检查未通过");
+    }
+    await store.update(job.id, { status: "exporting", progress: 95 });
+    await runScript("svg_to_pptx.py", [projectPath, "--quick-generate", "--no-notes"]);
     const names = await readdir(join(projectPath, "exports")).catch(() => []);
     const pptx = names.filter((name) => name.endsWith(".pptx")).sort().at(-1);
     if (!pptx) throw new Error("工作会话结束，但没有导出 PPTX 文件");

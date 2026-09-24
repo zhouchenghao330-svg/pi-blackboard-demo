@@ -78,7 +78,10 @@ const state = {
   pptFingerprint: "",
   selectedMeetingId: null,
   meetingFingerprint: "",
+  meetingDetailFingerprint: "",
+  meetingDrafts: new Map(),
   selectedDocumentId: null,
+  manualSlotSelection: false,
   board: null,
   boardAnnotations: [],
   boardSearchResults: null,
@@ -198,7 +201,7 @@ function renderDocumentTabs() {
     button.type = "button";
     button.append(boardNode("span", "board-doc-icon", "PDF"), boardNode("span", "board-doc-name", doc.name));
     button.append(boardNode("span", `board-doc-status ${doc.status}`, doc.status === "ready" ? "已就绪" : doc.status === "failed" ? "失败" : doc.status === "processing" ? "解析中" : "待解析"));
-    button.addEventListener("click", () => { void selectDocument(doc.id); });
+    button.addEventListener("click", () => { state.manualSlotSelection = true; void selectDocument(doc.id); });
     elements.boardDocuments.append(button);
   }
 }
@@ -458,7 +461,7 @@ function renderMeetingTabs() {
     tab.type = "button";
     tab.append(boardNode("strong", "", item.name), boardNode("small", "", meetingStatusText[item.status] || item.status));
     if (item.analysisPolicy?.riskFocus?.length) tab.append(boardNode("small", "meeting-tab-focus", item.analysisPolicy.riskFocus.join(" · ")));
-    tab.addEventListener("click", () => { void selectMeeting(item.id); });
+    tab.addEventListener("click", () => { state.manualSlotSelection = true; void selectMeeting(item.id); });
     elements.meetingList.append(tab);
   }
 }
@@ -471,6 +474,7 @@ function renderMeeting(meeting) {
     const source = { user: "用户指定", agent: "Agent 阅读后拟定", default: "通用默认" }[meeting.analysisPolicy.source] || "本次";
     const focus = meeting.analysisPolicy.riskFocus?.length ? meeting.analysisPolicy.riskFocus.join(" · ") : "排期、依赖、资源、责任与未决决策";
     const card = meetingCard(`本次审查重点 · ${source}`, focus);
+    if (meeting.analysisPolicy.focusMode === "only") card.append(boardNode("small", "", "仅审查以上维度"));
     if (meeting.analysisPolicy.reason) card.append(boardNode("small", "", meeting.analysisPolicy.reason));
     root.append(card);
   }
@@ -494,6 +498,7 @@ function renderMeeting(meeting) {
           method: "POST", headers: { "content-type": "application/json" },
           body: JSON.stringify(meeting.analysisPolicy ? {
             risk_focus: meeting.analysisPolicy.riskFocus,
+            focus_mode: meeting.analysisPolicy.focusMode,
             risk_focus_source: meeting.analysisPolicy.source,
             risk_focus_reason: meeting.analysisPolicy.reason,
           } : {}),
@@ -574,33 +579,73 @@ function renderMeeting(meeting) {
     if (!items?.length) continue;
     const card = meetingCard(title);
     for (const item of items) {
-      card.append(boardNode("p", "", `${item.task}${item.owner ? ` · ${item.owner}` : " · 负责人待确认"}${item.deadline ? ` · ${item.deadline}` : ""}`));
+      const status = item.status === "done" ? "已完成" : "待处理";
+      card.append(boardNode("p", "", `${status} · ${item.task}${item.owner ? ` · ${item.owner}` : " · 负责人待确认"}${item.deadline ? ` · ${item.deadline}` : ""}`));
       addEvidence(card, item, meeting);
+      if (["completed", "awaiting_confirmation", "sent"].includes(meeting.status)) {
+        const button = boardNode("button", "meeting-retry", item.status === "done" ? "重新打开" : "标记完成");
+        button.type = "button";
+        button.addEventListener("click", async () => {
+          button.disabled = true;
+          try {
+            await api(`/api/sessions/${state.activeId}/meetings/${meeting.id}/todos/${item.id}`, {
+              method: "PATCH", headers: { "content-type": "application/json" },
+              body: JSON.stringify({ status: item.status === "done" ? "open" : "done" }),
+            });
+            await refreshMeetings(state.activeId);
+          } catch (error) { showToast(error.message); button.disabled = false; }
+        });
+        card.append(button);
+      }
     }
     root.append(card);
   }
   if (meeting.email) {
     const card = meetingCard(`邮件草稿 · v${meeting.email.version || 1}`);
     if (meeting.email.status === "incomplete") card.append(boardNode("p", "meeting-draft-note", "草稿已清空或未完成。保存标题和正文后才能发送。"));
+    let subject;
+    let body;
+    const draftKey = `${state.activeId}:${meeting.id}`;
+    let draft = state.meetingDrafts.get(draftKey);
     if (meeting.status === "awaiting_confirmation") {
-      const subject = boardNode("input", "meeting-email-input");
-      subject.value = meeting.email.subject;
+      if (!draft || !draft.dirty && draft.version !== meeting.email.version) {
+        draft = { version: meeting.email.version, subject: meeting.email.subject,
+          body: meeting.email.body, recipient: draft?.recipient || "", dirty: false };
+        state.meetingDrafts.set(draftKey, draft);
+      }
+      const conflict = draft.version !== meeting.email.version;
+      if (conflict) {
+        const warning = boardNode("p", "meeting-draft-note", "服务端草稿已更新；本地修改仍保留。请重新查看最新草稿后再编辑或发送。");
+        const reload = boardNode("button", "meeting-retry", "载入最新草稿");
+        reload.type = "button";
+        reload.addEventListener("click", () => { state.meetingDrafts.delete(draftKey); renderMeeting(meeting); });
+        card.append(warning, reload);
+      }
+      subject = boardNode("input", "meeting-email-input");
+      subject.value = draft.subject;
       subject.setAttribute("aria-label", "邮件标题");
-      const body = boardNode("textarea", "meeting-email-input");
-      body.value = meeting.email.body;
+      body = boardNode("textarea", "meeting-email-input");
+      body.value = draft.body;
       body.rows = 10;
       body.setAttribute("aria-label", "邮件正文");
+      subject.addEventListener("input", () => { draft.subject = subject.value; draft.dirty = true; });
+      body.addEventListener("input", () => { draft.body = body.value; draft.dirty = true; });
       const save = boardNode("button", "meeting-retry", "保存草稿修改");
       save.type = "button";
+      save.disabled = conflict;
       save.addEventListener("click", async () => {
         try {
-          await api(`/api/sessions/${state.activeId}/meetings/${meeting.id}/email/draft`, {
+          const saved = await api(`/api/sessions/${state.activeId}/meetings/${meeting.id}/email/draft`, {
             method: "PUT", headers: { "content-type": "application/json" },
-            body: JSON.stringify({ subject: subject.value, body: body.value }),
+            body: JSON.stringify({ subject: subject.value, body: body.value, expected_draft_version: draft.version }),
           });
+          draft.version = saved.email.version;
+          draft.subject = saved.email.subject;
+          draft.body = saved.email.body;
+          draft.dirty = false;
           showToast("草稿已保存，请核对后发送");
           await refreshMeetings(state.activeId);
-        } catch (error) { showToast(error.message); }
+        } catch (error) { showToast(error.message); await refreshMeetings(state.activeId); }
       });
       card.append(subject, body, save);
     } else {
@@ -614,18 +659,21 @@ function renderMeeting(meeting) {
       input.setAttribute("aria-label", "收件邮箱");
       const button = boardNode("button", "meeting-send", "确认并发送邮件");
       button.type = "button";
-      button.disabled = meeting.email.status !== "draft";
+      button.disabled = meeting.email.status !== "draft" || draft.version !== meeting.email.version;
+      input.value = draft.recipient;
+      input.addEventListener("input", () => { draft.recipient = input.value; });
       button.addEventListener("click", async () => {
         if (!input.validity.valid || !input.value.trim()) { showToast("请输入有效收件邮箱"); return; }
         if (subject.value !== meeting.email.subject || body.value !== meeting.email.body) { showToast("草稿已修改，请先保存后再发送"); return; }
         button.disabled = true;
         try {
           await api(`/api/sessions/${state.activeId}/meetings/${meeting.id}/email/send`, {
-            method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ recipient: input.value.trim() }),
+            method: "POST", headers: { "content-type": "application/json" },
+            body: JSON.stringify({ recipient: input.value.trim(), expected_draft_version: draft.version }),
           });
           showToast("SMTP 服务器已接受邮件");
           await refreshMeetings(state.activeId);
-        } catch (error) { showToast(error.message); button.disabled = false; }
+        } catch (error) { showToast(error.message); button.disabled = false; await refreshMeetings(state.activeId); }
       });
       card.append(input, button);
     }
@@ -655,6 +703,7 @@ function renderMeeting(meeting) {
 
 async function selectMeeting(id) {
   state.selectedMeetingId = id;
+  state.meetingDetailFingerprint = "";
   renderMeetingTabs();
   if (!id) {
     elements.meetingContent.replaceChildren(meetingCard("还没有会议", "在对话框上传会议 TXT，Agent 会提交后台分析。"));
@@ -662,19 +711,27 @@ async function selectMeeting(id) {
   }
   const sessionId = state.activeId;
   const { meeting } = await api(`/api/sessions/${sessionId}/meetings/${id}`);
-  if (state.activeId === sessionId && state.selectedMeetingId === id) renderMeeting(meeting);
+  if (state.activeId === sessionId && state.selectedMeetingId === id) {
+    state.meetingDetailFingerprint = JSON.stringify([meeting.id, meeting.status, meeting.progress, meeting.updatedAt, meeting.email?.version]);
+    renderMeeting(meeting);
+  }
 }
 
 async function refreshMeetings(id) {
-  if (!id) { state.meetings = []; state.selectedMeetingId = null; renderMeetingTabs(); await selectMeeting(null); return; }
+  if (!id) { state.meetings = []; state.selectedMeetingId = null; state.meetingDetailFingerprint = ""; renderMeetingTabs(); await selectMeeting(null); return; }
   const { meetings } = await api(`/api/sessions/${id}/meetings`);
   if (state.activeId !== id) return;
   const newRun = meetings.find((item) => item.sourceMeetingId && !state.meetings.some((previous) => previous.id === item.id));
   state.meetings = meetings;
-  const selected = newRun?.id || (meetings.some((item) => item.id === state.selectedMeetingId) ? state.selectedMeetingId : meetings[0]?.id || null);
+  const selected = (!state.manualSlotSelection && newRun?.id) || (meetings.some((item) => item.id === state.selectedMeetingId) ? state.selectedMeetingId : meetings[0]?.id || null);
   const fingerprint = JSON.stringify(meetings.map((item) => [item.id, item.status, item.progress, item.updatedAt]));
-  if (selected !== state.selectedMeetingId || fingerprint !== state.meetingFingerprint) {
+  const current = meetings.find((item) => item.id === selected);
+  const detailFingerprint = current && JSON.stringify([current.id, current.status, current.progress, current.updatedAt, current.email?.version]);
+  if (fingerprint !== state.meetingFingerprint) {
     state.meetingFingerprint = fingerprint;
+    renderMeetingTabs();
+  }
+  if (selected !== state.selectedMeetingId || detailFingerprint !== state.meetingDetailFingerprint) {
     await selectMeeting(selected);
   }
 }
@@ -690,7 +747,7 @@ function renderPpts() {
     const tab = boardNode("button", `meeting-tab${job.id === state.selectedPptId ? " active" : ""}`);
     tab.type = "button";
     tab.append(boardNode("strong", "", job.brief.slice(0, 34)), boardNode("small", "", pptStatusText[job.status] || job.status));
-    tab.addEventListener("click", () => { state.selectedPptId = job.id; renderPpts(); });
+    tab.addEventListener("click", () => { state.manualSlotSelection = true; state.selectedPptId = job.id; renderPpts(); });
     elements.pptList.append(tab);
   }
   const job = state.ppts.find((item) => item.id === state.selectedPptId);
@@ -727,7 +784,7 @@ async function refreshPpts(id) {
   if (fingerprint === state.pptFingerprint) return;
   const newest = jobs.find((job) => !state.ppts.some((old) => old.id === job.id));
   state.ppts = jobs;
-  state.selectedPptId = newest?.id || (jobs.some((job) => job.id === state.selectedPptId) ? state.selectedPptId : jobs[0]?.id || null);
+  state.selectedPptId = (!state.manualSlotSelection && newest?.id) || (jobs.some((job) => job.id === state.selectedPptId) ? state.selectedPptId : jobs[0]?.id || null);
   state.pptFingerprint = fingerprint;
   renderPpts();
 }
@@ -744,6 +801,30 @@ function renderThinkingLevels(levels, selected) {
   }
   state.thinkingLevel = levels.includes(selected) ? selected : levels[0];
   elements.thinkingSelect.value = state.thinkingLevel;
+}
+
+async function followSlot(event, sessionId) {
+  if (state.activeId !== sessionId || state.manualSlotSelection) return;
+  if (event.kind === "pdf") {
+    await refreshDocuments(sessionId);
+    if (state.activeId !== sessionId || state.manualSlotSelection) return;
+    await selectDocument(event.slotId);
+    document.body.classList.add("board-open");
+    document.body.classList.remove("meeting-open", "ppt-open");
+  } else if (event.kind === "txt") {
+    await refreshMeetings(sessionId);
+    if (state.activeId !== sessionId || state.manualSlotSelection) return;
+    await selectMeeting(event.resourceId || event.slotId);
+    document.body.classList.add("meeting-open");
+    document.body.classList.remove("board-open", "ppt-open");
+  } else if (event.kind === "ppt") {
+    await refreshPpts(sessionId);
+    if (state.activeId !== sessionId || state.manualSlotSelection) return;
+    state.selectedPptId = event.slotId;
+    renderPpts();
+    document.body.classList.add("ppt-open");
+    document.body.classList.remove("board-open", "meeting-open");
+  }
 }
 
 function updateTextareaHeight() {
@@ -1008,6 +1089,8 @@ function connectSessionEvents(id) {
       } else addTool(event.name, event.error ? "执行失败" : "已完成");
     } else if (event.type === "status") {
       addTool("状态", event.text);
+    } else if (event.type === "slot_selected") {
+      void followSlot(event, id).catch((error) => showToast(error.message));
     }
   };
 }
@@ -1016,6 +1099,7 @@ async function loadSession(id) {
   try {
     const { session } = await api(`/api/sessions/${id}`);
     state.activeId = id;
+    state.manualSlotSelection = false;
     elements.sessionTitle.textContent = session.title;
     renderContext(session.context);
     renderThinkingLevels(session.thinkingLevels, session.thinkingLevel);
@@ -1157,6 +1241,7 @@ async function sendMessage() {
   const txts = state.attachments.filter((item) => item.kind === "txt");
   if (!text && !images.length && !pdfs.length && !txts.length) return;
   if (!state.model) { showToast("请先配置模型"); return; }
+  state.manualSlotSelection = false;
 
   let id = state.activeId;
   let accepted = false;
@@ -1277,6 +1362,8 @@ async function sendMessage() {
         }
       } else if (event.type === "status") {
         addTool("状态", event.text);
+      } else if (event.type === "slot_selected") {
+        void followSlot(event, id).catch((error) => showToast(error.message));
       } else if (event.type === "pdf_progress") {
         const doc = state.documents.find((item) => item.id === event.documentId);
         if (doc) {
@@ -1418,14 +1505,17 @@ elements.imageInput.addEventListener("change", () => {
   elements.imageInput.value = "";
 });
 elements.boardToggle.addEventListener("click", () => {
+  state.manualSlotSelection = true;
   const open = document.body.classList.toggle("board-open");
   if (open) document.body.classList.remove("meeting-open", "ppt-open");
 });
 elements.meetingToggle.addEventListener("click", () => {
+  state.manualSlotSelection = true;
   const open = document.body.classList.toggle("meeting-open");
   if (open) document.body.classList.remove("board-open", "ppt-open");
 });
 elements.pptToggle.addEventListener("click", () => {
+  state.manualSlotSelection = true;
   const open = document.body.classList.toggle("ppt-open");
   if (open) document.body.classList.remove("board-open", "meeting-open");
 });

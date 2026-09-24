@@ -64,14 +64,13 @@ export function normalizePolicy(input = {}) {
   }
   const riskFocus = [...new Set((raw || []).map((item) => item.trim()).filter(Boolean))];
   const source = input.risk_focus_source || (riskFocus.length ? "agent" : "default");
+  const focusMode = input.focus_mode || "include";
   if (!["user", "agent", "default"].includes(source) ||
+      !["include", "only"].includes(focusMode) || focusMode === "only" && (!riskFocus.length || source !== "user") ||
       typeof (input.risk_focus_reason || "") !== "string" || (input.risk_focus_reason || "").length > 300) {
     throw bad("审查重点来源或说明无效");
   }
-  if (riskFocus.some((item) => /[0-9０-９：:]/.test(item))) {
-    throw bad("审查重点只能写风险维度，不能包含日期、数字或具体事实；请改为如“交付节点”“供应商依赖”");
-  }
-  return { version: 1, riskFocus, source, reason: (input.risk_focus_reason || "").trim() };
+  return { version: 1, riskFocus, focusMode, source, reason: (input.risk_focus_reason || "").trim() };
 }
 
 function validateCandidates(value, lineCount, max) {
@@ -94,6 +93,8 @@ function validateVerification(value, candidates, lineCount) {
   for (const result of value.results) {
     if (!result || !ids.has(result.candidate_id) || seen.has(result.candidate_id) || !VERDICTS.has(result.verdict) ||
         typeof result.reason !== "string" || typeof result.missing_information !== "string" ||
+        typeof result.final_title !== "string" || typeof result.final_claim !== "string" ||
+        result.verdict !== "rejected" && (!result.final_title.trim() || !result.final_claim.trim()) ||
         result.duplicate_of !== undefined && typeof result.duplicate_of !== "string" ||
         result.duplicate_of && (!ids.has(result.duplicate_of) || result.duplicate_of === result.candidate_id || result.verdict !== "rejected")) {
       throw invalid("核验结论、重复关系或候选 ID 无效");
@@ -103,6 +104,10 @@ function validateVerification(value, candidates, lineCount) {
     checkLines(result.counter_evidence_lines, lineCount, "反证");
     if (result.verdict !== "rejected" && !result.supporting_lines.length) throw invalid("保留的线索缺少支持证据");
     seen.add(result.candidate_id);
+  }
+  const byId = new Map(value.results.map((result) => [result.candidate_id, result]));
+  if (value.results.some((result) => result.duplicate_of && byId.get(result.duplicate_of)?.verdict === "rejected")) {
+    throw invalid("重复候选必须指向最终保留的候选，不能互相删除或串联到已排除项");
   }
   return value.results;
 }
@@ -124,16 +129,19 @@ function validateTodos(value, risks, lineCount) {
 }
 
 function policyText(policy) {
-  return `固定通用检查维度：${DEFAULT_FOCUS.join("、")}。本次额外重点：${policy.riskFocus.length ? policy.riskFocus.join("；") : "无"}。重点是审查方向，不是事实或风险成立的证据，也不排除明显的其他问题。风险至少需要原文明确的冲突、障碍、负面变化或未决决策及其可能影响。会议刚安排的任务，即使没有后续完成记录，也不能推断“未完成”“没有回复”或“责任不清”，更不能仅因此产生独立风险；只有原文说已逾期、遇到阻碍或后续决策确实被卡住时才另行判断。`;
+  const scope = policy.focusMode === "only"
+    ? `本次只审查用户指定的维度：${policy.riskFocus.join("；")}；其他维度不列入结论。`
+    : `固定通用检查维度：${DEFAULT_FOCUS.join("、")}。本次额外重点：${policy.riskFocus.length ? policy.riskFocus.join("；") : "无"}。重点不排除明显的其他问题。`;
+  return `${scope}审查方向不是事实或风险成立的证据。风险至少需要原文明确的冲突、障碍、负面变化或未决决策及其可能影响。会议刚安排的任务，即使没有后续完成记录，也不能推断“未完成”“没有回复”或“责任不清”，更不能仅因此产生独立风险；只有原文说已逾期、遇到阻碍或后续决策确实被卡住时才另行判断。`;
 }
 
 function modelPrompt(kind, payload) {
   if (kind === "facts") return `只分析这份会议 TXT。会议日期：${payload.meetingTime || "未提供"}；上传日期不是会议日期。逐行原文：\n${numberedLines(payload.rawText)}\n\n输出 JSON：{"summary":"简述","people":[{"content":"人名；只有原文明确说明角色时才加角色，不能根据谁发言或安排任务推测职位","evidence_lines":[1]}],"times":[{"content":"会议提及的时间，保留相对日期原话","evidence_lines":[1]}],"locations":[{"content":"地点","evidence_lines":[1]}],"topics":["主题"],"decisions":[{"content":"明确决定","evidence_lines":[1]}],"facts":[{"content":"发生了或预计发生的事实","evidence_lines":[1]}],"explicit_action_items":[{"task":"会议明确安排的任务","owner":"原文明确的人，否则空字符串","deadline":"原文明确的期限，否则空字符串","evidence_lines":[1]}],"uncertainties":["无法确认的事项"]}。原文只给了预计到货日、没给原计划时，不得在摘要中称为"已经延期"。不得把建议冒充会议已安排的任务。每条只引用直接支持它的物理行号，不能用行号掩盖推测。`;
   if (kind === "email") return `为本次会议最终保留的风险线索拟简洁中文通知邮件。只用以下会议分析，不引入 PDF 或其他资料。uncertain 只能写成待核实事项，不可写成已发生的问题；不编造收件人、负责人或期限。\n${JSON.stringify(payload)}\n输出 JSON：{"subject":"邮件标题","body":"纯文本邮件正文，包含依据、待核实信息和建议动作"}。`;
   const transcript = `会议原文：\n${numberedLines(payload.rawText)}\n会议事实（可能有误，以原文为准）：\n${JSON.stringify(payload.facts)}\n${policyText(payload.analysisPolicy)}`;
-  if (kind === "discovery") return `${transcript}\n\n只依据会议 TXT 寻找值得核验的独立风险候选，优先覆盖各议题，不要求现在确认。按“同一根因和同一应对动作”合并：设备晚到、联调不足、验收可能延期若来自一条因果链，应是一项候选，不要换标题重复列出。会议安排李明去要书面回复、王敏去估算工期，这只是明确待办；原文没说他们已经逾期或受阻时，不要单独列成“书面回复未取得”“估算未完成”的风险。检查时间冲突、依赖、资源、责任、未决决策、条件未满足、陈述冲突和本次重点。证据不完整时可保留为候选，但不得杜撰。\n输出 JSON：{"candidates":[{"title":"短标题","hypothesis":"可能影响什么，仅写条件性判断","category":"schedule|dependency|resource|ownership|decision|other","evidence_lines":[1],"question":"还需要核实什么"}]}。本次最多 ${payload.candidateLimit} 项，每项必须有原文行号；宁可合并同一问题，也不要凑满上限。不输出最终风险、待办或邮件。`;
-  if (kind === "verification") return `${transcript}\n\n独立核验候选。阅读完整会议原文，主动寻找削弱、否定或限制候选的后文。还要检查候选之间是否只是同一根因的重复表述；重复项标记 rejected，并在 duplicate_of 填被保留候选的 ID。特别检查：若候选只是把已安排的待办说成“尚未完成”，原文没有逾期或阻碍证据，应 rejected；若它只是另一风险的待核实条件，则 rejected 且 duplicate_of 指向该风险。不能只看候选所列行号，也不能因为发现阶段提出就默认成立。\n候选：${JSON.stringify(payload.candidates)}\n输出 JSON：{"results":[{"candidate_id":"候选 id","verdict":"verified|uncertain|rejected","duplicate_of":"重复时填另一候选 id，否则空字符串","reason":"基于原文解释结论；重复时说明关系","missing_information":"仍缺什么；无则空字符串","supporting_lines":[1],"counter_evidence_lines":[]}]}。每个候选恰好返回一项；verified/uncertain 至少有一行原文支持。未提及不等于未完成；没有项目基准不能宣称已经延期；关注重点不能降低证据标准。`;
-  if (kind === "coverage") return `${transcript}\n\n检查前面的审查是否漏掉会议主题或关注维度中的独立风险线索；同一根因或同一应对动作已覆盖时不能补出换名候选。最多补 ${MAX_ADDITIONS} 项，然后停止。\n已审查候选：${JSON.stringify(payload.reviewed)}\n输出 JSON：{"coverage_notes":[{"dimension":"会议主题或风险维度","result":"已覆盖、没有新线索或具体遗漏"}],"candidates":[{"title":"短标题","hypothesis":"条件性影响","category":"schedule|dependency|resource|ownership|decision|other","evidence_lines":[1],"question":"待核实问题"}]}。已有候选为空也要检查；不能因某维度未被提及就制造风险。`;
+  if (kind === "discovery") return `${transcript}\n\n只依据会议 TXT 寻找值得核验的独立风险候选，优先覆盖${payload.analysisPolicy.focusMode === "only" ? "指定审查维度" : "各议题"}，不要求现在确认。按“同一根因和同一应对动作”合并：设备晚到、联调不足、验收可能延期若来自一条因果链，应是一项候选，不要换标题重复列出。会议安排李明去要书面回复、王敏去估算工期，这只是明确待办；原文没说他们已经逾期或受阻时，不要单独列成“书面回复未取得”“估算未完成”的风险。${payload.analysisPolicy.focusMode === "only" ? "只检查用户指定维度内的线索。" : "检查时间冲突、依赖、资源、责任、未决决策、条件未满足、陈述冲突和本次重点。"}证据不完整时可保留为候选，但不得杜撰。\n输出 JSON：{"candidates":[{"title":"短标题","hypothesis":"可能影响什么，仅写条件性判断","category":"schedule|dependency|resource|ownership|decision|other","evidence_lines":[1],"question":"还需要核实什么"}]}。本次最多 ${payload.candidateLimit} 项，每项必须有原文行号；宁可合并同一问题，也不要凑满上限。不输出最终风险、待办或邮件。`;
+  if (kind === "verification") return `${transcript}\n\n独立核验候选。阅读完整会议原文，主动寻找削弱、否定或限制候选的后文。还要检查候选之间是否只是同一根因的重复表述；重复项标记 rejected，并在 duplicate_of 填最终保留候选的 ID，不得互相指向。特别检查：若候选只是把已安排的待办说成“尚未完成”，原文没有逾期或阻碍证据，应 rejected；若它只是另一风险的待核实条件，则 rejected 且 duplicate_of 指向该风险。不能只看候选所列行号，也不能因为发现阶段提出就默认成立。对于保留项，重新写最终标题和结论，必须反映反证与适用范围，不得沿用已被核验否定的原始假设。\n候选：${JSON.stringify(payload.candidates)}\n输出 JSON：{"results":[{"candidate_id":"候选 id","verdict":"verified|uncertain|rejected","final_title":"核验后的标题；排除项可留空","final_claim":"核验后的准确表述；排除项可留空","duplicate_of":"重复时填最终保留候选 id，否则空字符串","reason":"基于原文解释结论；重复时说明关系","missing_information":"仍缺什么；无则空字符串","supporting_lines":[1],"counter_evidence_lines":[]}]}。每个候选恰好返回一项；verified/uncertain 至少有一行原文支持。未提及不等于未完成；没有项目基准不能宣称已经延期；关注重点不能降低证据标准。`;
+  if (kind === "coverage") return `${transcript}\n\n检查前面的审查是否漏掉${payload.analysisPolicy.focusMode === "only" ? "用户指定维度内" : "会议主题或关注维度中"}的独立风险线索；同一根因或同一应对动作已覆盖时不能补出换名候选。最多补 ${MAX_ADDITIONS} 项，然后停止。\n已审查候选：${JSON.stringify(payload.reviewed)}\n输出 JSON：{"coverage_notes":[{"dimension":"会议主题或风险维度","result":"已覆盖、没有新线索或具体遗漏"}],"candidates":[{"title":"短标题","hypothesis":"条件性影响","category":"schedule|dependency|resource|ownership|decision|other","evidence_lines":[1],"question":"待核实问题"}]}。已有候选为空也要检查；不能因某维度未被提及就制造风险。`;
   if (kind === "todos") return `${transcript}\n\n只根据最终保留的会议风险线索提出必要的额外待办。已有明确安排覆盖时输出空数组；不为填满而制造建议。负责人和期限未明确就留空。\n最终风险：${JSON.stringify(payload.risks)}\n明确待办：${JSON.stringify(payload.facts.explicit_action_items)}\n输出 JSON：{"suggested_todos":[{"risk_id":"对应风险 id","task":"建议行动","owner":"原文明确才填","deadline":"原文明确才填","reason":"为何尚需行动","evidence_lines":[1]}]}。`;
   throw new Error(`未知会议分析阶段：${kind}`);
 }
@@ -239,8 +247,8 @@ export async function createMeetingWorkflow({ store, documents, agentDir, modelI
           ...item, ...(extra || []).find((result) => result.candidate_id === item.id),
         }))];
         const risks = allReviewed.filter((item) => item.verdict !== "rejected").map((item, index) => ({
-          id: `risk-${index + 1}`, candidate_id: item.id, title: item.title,
-          description: item.hypothesis, category: item.category, verdict: item.verdict,
+          id: `risk-${index + 1}`, candidate_id: item.id, title: item.final_title || item.title,
+          description: item.final_claim || item.hypothesis, category: item.category, verdict: item.verdict,
           reason: item.reason, uncertainty: item.missing_information,
           evidence_lines: item.supporting_lines, counter_evidence_lines: item.counter_evidence_lines,
         }));
@@ -251,9 +259,9 @@ export async function createMeetingWorkflow({ store, documents, agentDir, modelI
       }
       const risks = meeting.analysis.risks;
       if (!meeting.todos) {
-        const explicit = facts.explicit_action_items.map((item, index) => ({ id: `explicit-${index + 1}`, ...item }));
+        const explicit = facts.explicit_action_items.map((item, index) => ({ id: `explicit-${index + 1}`, status: "open", ...item }));
         const suggested = risks.length ? (await ask("todos", { ...meeting, facts, risks }, (value) =>
-          validateTodos(value, risks, meeting.lineCount))).map((item, index) => ({ id: `suggested-${index + 1}`, ...item })) : [];
+          validateTodos(value, risks, meeting.lineCount))).map((item, index) => ({ id: `suggested-${index + 1}`, status: "open", ...item })) : [];
         meeting = await store.update(sessionId, id, {
           todos: { explicit, suggested }, status: risks.length ? "drafting_email" : "completed",
           progress: risks.length ? 90 : 100,
@@ -323,7 +331,8 @@ export async function createMeetingWorkflow({ store, documents, agentDir, modelI
       const pending = previous.catch(() => {}).then(async () => {
         const runs = (await store.list(sessionId)).filter((item) => (item.sourceMeetingId || item.id) === rootId);
         let target = runs.find((item) => item.analysisPolicy &&
-          JSON.stringify(item.analysisPolicy.riskFocus) === JSON.stringify(policy.riskFocus));
+          JSON.stringify(item.analysisPolicy.riskFocus) === JSON.stringify(policy.riskFocus) &&
+          (item.analysisPolicy.focusMode || "include") === policy.focusMode);
         if (!target) {
           const original = runs.find((item) => item.id === rootId);
           target = original.status === "uploaded" && !original.analysisPolicy
@@ -344,7 +353,30 @@ export async function createMeetingWorkflow({ store, documents, agentDir, modelI
       finally { if (submitting.get(key) === pending) submitting.delete(key); }
     },
     async get(sessionId, id) { return store.requireMeeting(sessionId, id); },
-    async updateDraft(sessionId, id, subject, body, enrichment) {
+    async updateTodo(sessionId, id, todoId, input) {
+      if (!/^(explicit|suggested)-\d+$/.test(todoId) || !["open", "done"].includes(input?.status) ||
+          input.owner !== undefined && (typeof input.owner !== "string" || input.owner.length > 100) ||
+          input.deadline !== undefined && (typeof input.deadline !== "string" || input.deadline.length > 100)) {
+        throw bad("待办状态、负责人或期限无效");
+      }
+      const updated = await store.update(sessionId, id, (meeting) => {
+        if (!meeting.todos || !["completed", "awaiting_confirmation", "sent"].includes(meeting.status)) {
+          throw bad("会议分析尚未完成，不能更新待办", 409);
+        }
+        const group = todoId.startsWith("explicit-") ? "explicit" : "suggested";
+        if (!meeting.todos[group]?.some((item) => item.id === todoId)) throw bad("待办不存在", 404);
+        const now = new Date().toISOString();
+        return { todos: { ...meeting.todos, [group]: meeting.todos[group].map((item) => item.id !== todoId ? item : {
+          ...item, status: input.status, owner: input.owner === undefined ? item.owner : input.owner.trim(),
+          deadline: input.deadline === undefined ? item.deadline : input.deadline.trim(),
+          updates: [...(item.updates || []), { at: now, status: input.status,
+            ...(input.owner !== undefined ? { owner: input.owner.trim() } : {}),
+            ...(input.deadline !== undefined ? { deadline: input.deadline.trim() } : {}) }],
+        }) } };
+      });
+      return [...updated.todos.explicit, ...updated.todos.suggested].find((item) => item.id === todoId);
+    },
+    async updateDraft(sessionId, id, subject, body, enrichment, expectedDraftVersion) {
       if (sending.has(id)) throw Object.assign(new Error("邮件正在发送，不能修改草稿"), { status: 409 });
       sending.add(id);
       try {
@@ -358,6 +390,9 @@ export async function createMeetingWorkflow({ store, documents, agentDir, modelI
           throw Object.assign(new Error("邮件标题或正文无效"), { status: 400 });
         }
         if (!meeting.email && !enrichment) throw bad("会议未发现风险；创建草稿前须提供有来源的背景补充");
+        if (meeting.email && meeting.email.version !== expectedDraftVersion) {
+          throw bad("邮件草稿版本已变化，请重新查看并修改最新内容", 409);
+        }
         const added = enrichment ? await makeEnrichment(sessionId, meeting, enrichment) : null;
         const previous = meeting.email;
         const updated = await store.update(sessionId, id, {
@@ -391,7 +426,7 @@ export async function createMeetingWorkflow({ store, documents, agentDir, modelI
       });
       return updated.email;
     },
-    async send(sessionId, id, recipient) {
+    async send(sessionId, id, recipient, expectedDraftVersion) {
       const address = String(recipient || "").trim();
       if (!/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(address) || address.length > 254) {
         throw Object.assign(new Error("请输入有效收件邮箱"), { status: 400 });
@@ -400,7 +435,14 @@ export async function createMeetingWorkflow({ store, documents, agentDir, modelI
       sending.add(id);
       try {
         const meeting = await store.requireMeeting(sessionId, id);
-        if (meeting.status === "sent") return { status: "sent", recipient: meeting.email.recipient, sentAt: meeting.email.sentAt };
+        if (!Number.isInteger(expectedDraftVersion) || expectedDraftVersion < 1 ||
+            meeting.email?.version !== expectedDraftVersion) {
+          throw bad("邮件草稿版本已变化，请重新查看并确认最新内容", 409);
+        }
+        if (meeting.status === "sent") {
+          if (meeting.email.recipient !== address) throw bad("邮件已发送至其他收件人", 409);
+          return { status: "sent", recipient: address, sentAt: meeting.email.sentAt };
+        }
         if (meeting.status !== "awaiting_confirmation" || meeting.email?.status !== "draft" ||
             !meeting.email.subject?.trim() || !meeting.email.body?.trim()) {
           throw bad("邮件草稿未完成，或发送结果需要人工核查", 409);

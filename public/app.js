@@ -20,6 +20,9 @@ const elements = {
   connectionPill: document.querySelector("#connectionPill"),
   connectionText: document.querySelector("#connectionText"),
   modelPill: document.querySelector("#modelPill"),
+  contextMeter: document.querySelector("#contextMeter"),
+  contextLabel: document.querySelector("#contextLabel"),
+  contextMeterFill: document.querySelector("#contextMeterFill"),
   conversation: document.querySelector("#conversation"),
   emptyState: document.querySelector("#emptyState"),
   messages: document.querySelector("#messages"),
@@ -33,6 +36,9 @@ const elements = {
   thinkingSelect: document.querySelector("#thinkingSelect"),
   boardToggle: document.querySelector("#boardToggle"),
   meetingToggle: document.querySelector("#meetingToggle"),
+  pptToggle: document.querySelector("#pptToggle"),
+  pptList: document.querySelector("#pptList"),
+  pptContent: document.querySelector("#pptContent"),
   meetingList: document.querySelector("#meetingList"),
   meetingContent: document.querySelector("#meetingContent"),
   boardPanel: document.querySelector("#blackboardPanel"),
@@ -59,6 +65,7 @@ const state = {
   localStreamId: null,
   eventSource: null,
   sessionFingerprint: "",
+  completedAssistantMessages: new Map(),
   model: null,
   thinkingLevel: localStorage.getItem("demoThinkingLevel") || "off",
   thinkingLevels: ["off"],
@@ -66,6 +73,9 @@ const state = {
   attachments: [],
   documents: [],
   meetings: [],
+  ppts: [],
+  selectedPptId: null,
+  pptFingerprint: "",
   selectedMeetingId: null,
   meetingFingerprint: "",
   selectedDocumentId: null,
@@ -92,6 +102,23 @@ function showToast(message) {
   elements.toast.hidden = false;
   clearTimeout(state.toastTimer);
   state.toastTimer = setTimeout(() => { elements.toast.hidden = true; }, 4000);
+}
+
+function renderContext(context) {
+  elements.contextMeter.hidden = !context;
+  if (!context) return;
+  if (!context.autoCompaction) {
+    elements.contextLabel.textContent = "自动压缩已关闭";
+  } else if (context.remaining === null) {
+    elements.contextLabel.textContent = "压缩后用量计算中";
+  } else {
+    elements.contextLabel.textContent = `距压缩约 ${Math.round(context.remaining / 1000)}k`;
+  }
+  const used = context.used ?? 0;
+  const percent = context.compactAt > 0 ? Math.min(100, used / context.compactAt * 100) : 0;
+  elements.contextMeterFill.style.width = `${percent}%`;
+  elements.contextMeter.classList.toggle("near-limit", context.remaining !== null && context.remaining < context.compactAt * 0.1);
+  elements.contextMeter.title = `主 Agent 上下文估算：${context.used ?? "统计中"} / ${context.compactAt} tokens（Pi 自动压缩阈值）；模型窗口 ${context.contextWindow} tokens`;
 }
 
 function closeSidebar() {
@@ -401,8 +428,10 @@ async function refreshDocuments(id) {
 
 const meetingStatusText = {
   uploaded: "等待提交", queued: "排队中", analyzing: "正在提取会议事实",
-  generating_todos: "正在识别风险与待办", drafting_email: "正在拟邮件",
-  awaiting_confirmation: "邮件待确认", completed: "分析完成，无明显风险",
+  discovering_risks: "正在寻找风险候选", verifying_risks: "正在核验候选",
+  checking_coverage: "正在检查遗漏", verifying_additions: "正在核验补漏候选",
+  generating_todos: "正在整理建议待办", drafting_email: "正在拟邮件",
+  awaiting_confirmation: "邮件待确认", completed: "会议分析完成",
   sending: "正在发送", sent: "SMTP 已接受", failed: "处理失败",
 };
 
@@ -428,6 +457,7 @@ function renderMeetingTabs() {
     const tab = boardNode("button", `meeting-tab${item.id === state.selectedMeetingId ? " active" : ""}`);
     tab.type = "button";
     tab.append(boardNode("strong", "", item.name), boardNode("small", "", meetingStatusText[item.status] || item.status));
+    if (item.analysisPolicy?.riskFocus?.length) tab.append(boardNode("small", "meeting-tab-focus", item.analysisPolicy.riskFocus.join(" · ")));
     tab.addEventListener("click", () => { void selectMeeting(item.id); });
     elements.meetingList.append(tab);
   }
@@ -437,12 +467,22 @@ function renderMeeting(meeting) {
   const root = boardNode("div", "meeting-report");
   root.append(boardNode("h3", "board-report-title", meeting.name));
   root.append(boardNode("p", "meeting-status", `${meetingStatusText[meeting.status] || meeting.status} · ${meeting.lineCount} 行${meeting.meetingTime ? ` · 会议时间 ${meeting.meetingTime}` : " · 会议时间未提供"}`));
+  if (meeting.analysisPolicy) {
+    const source = { user: "用户指定", agent: "Agent 阅读后拟定", default: "通用默认" }[meeting.analysisPolicy.source] || "本次";
+    const focus = meeting.analysisPolicy.riskFocus?.length ? meeting.analysisPolicy.riskFocus.join(" · ") : "排期、依赖、资源、责任与未决决策";
+    const card = meetingCard(`本次审查重点 · ${source}`, focus);
+    if (meeting.analysisPolicy.reason) card.append(boardNode("small", "", meeting.analysisPolicy.reason));
+    root.append(card);
+  }
   if (meeting.progress < 100 && meeting.status !== "failed") {
     const track = boardNode("div", "meeting-progress");
     const fill = boardNode("span");
     fill.style.width = `${meeting.progress || 0}%`;
     track.append(fill);
     root.append(track);
+    const found = meeting.analysis?.review?.discovery?.length || 0;
+    const checked = meeting.analysis?.review?.verified?.length || 0;
+    if (found || checked) root.append(boardNode("p", "meeting-status", `已发现 ${found} 个候选 · 已核验 ${checked} 个`));
   }
   if (meeting.error) root.append(meetingCard("处理错误", meeting.error, true));
   if (meeting.status === "uploaded" || meeting.status === "failed" && !meeting.email) {
@@ -450,7 +490,14 @@ function renderMeeting(meeting) {
     button.type = "button";
     button.addEventListener("click", async () => {
       try {
-        await api(`/api/sessions/${state.activeId}/meetings/${meeting.id}/submit`, { method: "POST" });
+        await api(`/api/sessions/${state.activeId}/meetings/${meeting.id}/submit`, {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify(meeting.analysisPolicy ? {
+            risk_focus: meeting.analysisPolicy.riskFocus,
+            risk_focus_source: meeting.analysisPolicy.source,
+            risk_focus_reason: meeting.analysisPolicy.reason,
+          } : {}),
+        });
         await refreshMeetings(state.activeId);
       } catch (error) { showToast(error.message); }
     });
@@ -476,12 +523,52 @@ function renderMeeting(meeting) {
   }
   if (meeting.analysis?.risks?.length) {
     for (const risk of meeting.analysis.risks) {
-      const card = meetingCard(`风险 · ${risk.title}`, `${risk.description}\n${risk.reason}${risk.uncertainty ? `\n待确认：${risk.uncertainty}` : ""}`, true);
+      const label = risk.verdict === "uncertain" ? "待核实线索" : "会议风险线索";
+      const card = meetingCard(`${label} · ${risk.title}`, `${risk.description}\n${risk.reason}${risk.uncertainty ? `\n待确认：${risk.uncertainty}` : ""}`, true);
       addEvidence(card, risk, meeting);
+      if (risk.counter_evidence_lines?.length) {
+        card.append(boardNode("small", "", "核验时发现的反证或限制"));
+        addEvidence(card, { evidence_lines: risk.counter_evidence_lines }, meeting);
+      }
       root.append(card);
     }
   } else if (["completed", "awaiting_confirmation", "sent"].includes(meeting.status)) {
     root.append(meetingCard("风险分析", "本次会议原文未发现有明确依据的风险。"));
+  }
+  const review = meeting.analysis?.review;
+  if (review?.verified?.length || review?.coverageNotes?.length) {
+    const detail = boardNode("details", "meeting-card meeting-review");
+    const verified = review.verified?.filter((item) => item.verdict === "verified").length || 0;
+    const uncertain = review.verified?.filter((item) => item.verdict === "uncertain").length || 0;
+    const rejected = review.verified?.filter((item) => item.verdict === "rejected").length || 0;
+    detail.append(boardNode("summary", "", `查看审查过程 · ${verified} 项确认 / ${uncertain} 项待核实 / ${rejected} 项排除`));
+    for (const item of review.verified || []) {
+      const card = meetingCard(`${item.verdict === "verified" ? "确认" : item.verdict === "uncertain" ? "待核实" : "已排除"} · ${item.title}`, item.reason);
+      if (item.supporting_lines?.length) {
+        card.append(boardNode("small", "", "支持依据"));
+        addEvidence(card, { evidence_lines: item.supporting_lines }, meeting);
+      }
+      if (item.counter_evidence_lines?.length) {
+        card.append(boardNode("small", "", "反证或限制"));
+        addEvidence(card, { evidence_lines: item.counter_evidence_lines }, meeting);
+      }
+      if (item.missing_information) card.append(boardNode("p", "", `仍需确认：${item.missing_information}`));
+      detail.append(card);
+    }
+    for (const note of review.coverageNotes || []) detail.append(boardNode("p", "meeting-coverage-note", `${note.dimension}：${note.result}`));
+    root.append(detail);
+  }
+  for (const item of meeting.agentEnrichments || []) {
+    const card = meetingCard("背景核验补充 · 主 Agent", item.content);
+    addEvidence(card, { evidence_lines: item.meeting_lines }, meeting);
+    for (const source of item.pdf_sources || []) {
+      const doc = state.documents.find((entry) => entry.id === source.document_id);
+      const button = boardNode("button", "board-view-page", `${doc?.name || "PDF"} · 物理第 ${source.page} 页 ↗`);
+      button.type = "button";
+      button.addEventListener("click", () => { if (doc) openPageViewer(doc, source.page); });
+      card.append(button);
+    }
+    root.append(card);
   }
   for (const [title, items] of [["会议明确待办", meeting.todos?.explicit], ["AI 建议待办", meeting.todos?.suggested]]) {
     if (!items?.length) continue;
@@ -494,6 +581,7 @@ function renderMeeting(meeting) {
   }
   if (meeting.email) {
     const card = meetingCard(`邮件草稿 · v${meeting.email.version || 1}`);
+    if (meeting.email.status === "incomplete") card.append(boardNode("p", "meeting-draft-note", "草稿已清空或未完成。保存标题和正文后才能发送。"));
     if (meeting.status === "awaiting_confirmation") {
       const subject = boardNode("input", "meeting-email-input");
       subject.value = meeting.email.subject;
@@ -526,6 +614,7 @@ function renderMeeting(meeting) {
       input.setAttribute("aria-label", "收件邮箱");
       const button = boardNode("button", "meeting-send", "确认并发送邮件");
       button.type = "button";
+      button.disabled = meeting.email.status !== "draft";
       button.addEventListener("click", async () => {
         if (!input.validity.valid || !input.value.trim()) { showToast("请输入有效收件邮箱"); return; }
         if (subject.value !== meeting.email.subject || body.value !== meeting.email.body) { showToast("草稿已修改，请先保存后再发送"); return; }
@@ -539,6 +628,22 @@ function renderMeeting(meeting) {
         } catch (error) { showToast(error.message); button.disabled = false; }
       });
       card.append(input, button);
+    }
+    if (meeting.email.status === "delivery_unknown") {
+      card.append(boardNode("p", "meeting-draft-note", "发送结果未知。请先核查收件箱和垃圾邮件箱，确认未送达后再恢复草稿。"));
+      const retry = boardNode("button", "meeting-retry", "已核查未送达，恢复草稿");
+      retry.type = "button";
+      retry.addEventListener("click", async () => {
+        retry.disabled = true;
+        try {
+          await api(`/api/sessions/${state.activeId}/meetings/${meeting.id}/email/undelivered`, {
+            method: "POST", headers: { "content-type": "application/json" },
+            body: JSON.stringify({ confirmedNotDelivered: true }),
+          });
+          await refreshMeetings(state.activeId);
+        } catch (error) { showToast(error.message); retry.disabled = false; }
+      });
+      card.append(retry);
     }
     root.append(card);
   }
@@ -564,13 +669,67 @@ async function refreshMeetings(id) {
   if (!id) { state.meetings = []; state.selectedMeetingId = null; renderMeetingTabs(); await selectMeeting(null); return; }
   const { meetings } = await api(`/api/sessions/${id}/meetings`);
   if (state.activeId !== id) return;
+  const newRun = meetings.find((item) => item.sourceMeetingId && !state.meetings.some((previous) => previous.id === item.id));
   state.meetings = meetings;
-  const selected = meetings.some((item) => item.id === state.selectedMeetingId) ? state.selectedMeetingId : meetings[0]?.id || null;
+  const selected = newRun?.id || (meetings.some((item) => item.id === state.selectedMeetingId) ? state.selectedMeetingId : meetings[0]?.id || null);
   const fingerprint = JSON.stringify(meetings.map((item) => [item.id, item.status, item.progress, item.updatedAt]));
   if (selected !== state.selectedMeetingId || fingerprint !== state.meetingFingerprint) {
     state.meetingFingerprint = fingerprint;
     await selectMeeting(selected);
   }
+}
+
+const pptStatusText = {
+  queued: "排队中", preparing: "准备工作区", generating: "制作页面",
+  checking: "质量检查", exporting: "导出文件", ready: "可下载", failed: "制作失败",
+};
+
+function renderPpts() {
+  elements.pptList.replaceChildren();
+  for (const job of state.ppts) {
+    const tab = boardNode("button", `meeting-tab${job.id === state.selectedPptId ? " active" : ""}`);
+    tab.type = "button";
+    tab.append(boardNode("strong", "", job.brief.slice(0, 34)), boardNode("small", "", pptStatusText[job.status] || job.status));
+    tab.addEventListener("click", () => { state.selectedPptId = job.id; renderPpts(); });
+    elements.pptList.append(tab);
+  }
+  const job = state.ppts.find((item) => item.id === state.selectedPptId);
+  if (!job) {
+    elements.pptContent.replaceChildren(meetingCard("还没有 PPT", "在对话中说明主题、受众和页数，Agent 会提交后台制作。"));
+    return;
+  }
+  const root = boardNode("div", "meeting-report");
+  root.append(boardNode("h3", "board-report-title", job.brief),
+    boardNode("p", "meeting-status", `${pptStatusText[job.status] || job.status} · ${job.pageCount} 页${job.pagesCreated ? ` · 已生成 ${job.pagesCreated} 页` : ""}`));
+  if (job.status !== "ready" && job.status !== "failed") {
+    const track = boardNode("div", "meeting-progress");
+    const fill = boardNode("span");
+    fill.style.width = `${job.progress || 0}%`;
+    track.append(fill);
+    root.append(track, boardNode("p", "meeting-status", `${job.progress || 0}% · 后台制作中，可以继续对话`));
+  }
+  if (job.error) root.append(meetingCard("制作失败", job.error, true));
+  if (job.status === "ready") {
+    const card = meetingCard("PPTX 已就绪", `${job.filename || "presentation.pptx"}\n${job.pageCount} 页，可在 PowerPoint 中继续编辑。`);
+    const link = boardNode("a", "ppt-download", "下载 PPTX ↗");
+    link.href = `/api/sessions/${state.activeId}/ppts/${job.id}/download`;
+    card.append(link);
+    root.append(card);
+  }
+  elements.pptContent.replaceChildren(root);
+}
+
+async function refreshPpts(id) {
+  if (!id) { state.ppts = []; state.selectedPptId = null; state.pptFingerprint = ""; renderPpts(); return; }
+  const { jobs } = await api(`/api/sessions/${id}/ppts`);
+  if (state.activeId !== id) return;
+  const fingerprint = JSON.stringify(jobs.map((job) => [job.id, job.status, job.progress, job.pagesCreated, job.updatedAt]));
+  if (fingerprint === state.pptFingerprint) return;
+  const newest = jobs.find((job) => !state.ppts.some((old) => old.id === job.id));
+  state.ppts = jobs;
+  state.selectedPptId = newest?.id || (jobs.some((job) => job.id === state.selectedPptId) ? state.selectedPptId : jobs[0]?.id || null);
+  state.pptFingerprint = fingerprint;
+  renderPpts();
 }
 
 function renderThinkingLevels(levels, selected) {
@@ -706,12 +865,17 @@ function renderHistory(messages, preserveScroll = false) {
   const previousTop = elements.conversation.scrollTop;
   const wasFollowing = state.followConversation;
   state.renderingHistory = true;
+  const completed = state.completedAssistantMessages.get(state.activeId) || new Set();
+  for (const message of messages) {
+    if (message.role === "assistant" && message.timestamp !== undefined) completed.add(message.timestamp);
+  }
+  state.completedAssistantMessages.set(state.activeId, completed);
   if (!preserveScroll) state.followConversation = true;
   elements.messages.replaceChildren();
   for (let message of messages) {
     if (message.role === "user" || message.role === "assistant") {
       if (message.role === "assistant" && !message.text && !message.thinking && !message.error) continue;
-      if (message.role === "user") message = { ...message, text: message.text.split(/\n\n\[上传的 (?:PDF|会议 TXT)：/)[0] };
+      if (message.role === "user") message = { ...message, text: message.text.split(/\n\n\[上传的\s*(?:PDF|会议 TXT)：/)[0] };
       addMessage(message);
     } else if (message.role === "tool") {
       addTool(message.name, message.error ? "执行失败" : "已完成");
@@ -779,6 +943,7 @@ function startPolling(id) {
   state.pollTimer = setInterval(async () => {
     try {
       const { session } = await api(`/api/sessions/${id}`);
+      if (state.activeId === id) renderContext(session.context);
       if (!session.running) {
         clearInterval(state.pollTimer);
         state.pollTimer = null;
@@ -805,10 +970,14 @@ function connectSessionEvents(id) {
   let draftText = "";
   let draftThinking = "";
   const activeToolStatuses = new Map();
+  const completed = state.completedAssistantMessages.get(id) || new Set();
+  state.completedAssistantMessages.set(id, completed);
   source.onmessage = (message) => {
     if (state.activeId !== id || state.localStreamId === id) return;
     let event;
     try { event = JSON.parse(message.data); } catch { return; }
+    const messageId = event.type === "message_end" ? event.message?.timestamp : event.messageId;
+    if (messageId !== undefined && completed.has(messageId)) return;
     if (event.type === "text_delta" || event.type === "thinking_delta") {
       if (!draft || !draft.row.isConnected) draft = addMessage({ role: "assistant", text: "" }, true);
       if (event.type === "text_delta") {
@@ -819,6 +988,7 @@ function connectSessionEvents(id) {
         draft.updateThinking(draftThinking, true);
       }
     } else if (event.type === "message_end") {
+      if (messageId !== undefined) completed.add(messageId);
       if (!draft || !draft.row.isConnected) draft = addMessage(event.message);
       else if (!event.message.text && !event.message.thinking && !event.message.error) draft.row.remove();
       else {
@@ -847,12 +1017,15 @@ async function loadSession(id) {
     const { session } = await api(`/api/sessions/${id}`);
     state.activeId = id;
     elements.sessionTitle.textContent = session.title;
+    renderContext(session.context);
     renderThinkingLevels(session.thinkingLevels, session.thinkingLevel);
     renderHistory(session.messages);
     connectSessionEvents(id);
     await refreshDocuments(id);
     state.meetingFingerprint = "";
     await refreshMeetings(id);
+    state.pptFingerprint = "";
+    await refreshPpts(id);
     renderSessions();
     closeSidebar();
     if (session.running && !state.runningId) {
@@ -871,12 +1044,14 @@ function newChat() {
   state.activeId = null;
   state.followConversation = true;
   elements.sessionTitle.textContent = "新的对话";
+  renderContext(null);
   elements.messages.replaceChildren();
   renderThinkingLevels(state.thinkingLevels, localStorage.getItem("demoThinkingLevel") || "off");
   updateEmptyState();
   renderSessions();
   void refreshDocuments(null);
   void refreshMeetings(null);
+  void refreshPpts(null);
   closeSidebar();
   updateControls();
   elements.messageInput.focus();
@@ -974,6 +1149,8 @@ async function uploadAttachedFiles(id, pdfs, txts) {
 
 async function sendMessage() {
   if (state.runningId && state.runningId !== state.activeId) { showToast("请等待另一个对话完成"); return; }
+  const originalText = elements.messageInput.value;
+  const originalAttachments = [...state.attachments];
   const text = elements.messageInput.value.trim();
   const images = state.attachments.filter((item) => item.kind === "image").map(({ mimeType, data }) => ({ mimeType, data }));
   const pdfs = state.attachments.filter((item) => item.kind === "pdf");
@@ -982,6 +1159,10 @@ async function sendMessage() {
   if (!state.model) { showToast("请先配置模型"); return; }
 
   let id = state.activeId;
+  let accepted = false;
+  let optimisticUser = null;
+  let pendingAssistant = null;
+  let ownsLocalStream = false;
   try {
     if (!id) {
       const body = await api("/api/sessions", { method: "POST" });
@@ -999,6 +1180,7 @@ async function sendMessage() {
       });
       const body = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(body.error || `请求失败 (${response.status})`);
+      accepted = true;
       addMessage({ role: "user", text: `${displayText}${pdfs.length ? `\n\nPDF：${pdfs.map((item) => item.name).join("、")}` : ""}${txts.length ? `\n\n会议：${txts.map((item) => item.name).join("、")}` : ""}`, images: images.length });
       elements.messageInput.value = "";
       state.attachments = [];
@@ -1010,13 +1192,15 @@ async function sendMessage() {
       return;
     }
     state.followConversation = true;
-    addMessage({ role: "user", text: `${displayText}${pdfs.length ? `\n\nPDF：${pdfs.map((item) => item.name).join("、")}` : ""}${txts.length ? `\n\n会议：${txts.map((item) => item.name).join("、")}` : ""}`, images: images.length });
+    optimisticUser = addMessage({ role: "user", text: `${displayText}${pdfs.length ? `\n\nPDF：${pdfs.map((item) => item.name).join("、")}` : ""}${txts.length ? `\n\n会议：${txts.map((item) => item.name).join("、")}` : ""}`, images: images.length });
     let draft = addMessage({ role: "assistant", text: "" }, true);
+    pendingAssistant = draft;
     let draftText = "";
     let draftThinking = "";
     const activeToolStatuses = new Map();
     state.runningId = id;
     state.localStreamId = id;
+    ownsLocalStream = true;
     elements.messageInput.value = "";
     state.attachments = [];
     renderAttachments();
@@ -1044,6 +1228,7 @@ async function sendMessage() {
       const body = await response.json().catch(() => ({}));
       throw new Error(body.error || `请求失败 (${response.status})`);
     }
+    accepted = true;
     if (response.status === 202) {
       draft.row.remove();
       state.runningId = null;
@@ -1067,6 +1252,10 @@ async function sendMessage() {
         draftThinking += event.text;
         draft.updateThinking(draftThinking, true);
       } else if (event.type === "message_end") {
+        if (event.message?.timestamp !== undefined) {
+          if (!state.completedAssistantMessages.has(id)) state.completedAssistantMessages.set(id, new Set());
+          state.completedAssistantMessages.get(id).add(event.message.timestamp);
+        }
         if (!draft) draft = addMessage(event.message);
         else if (!event.message.text && !event.message.thinking && !event.message.error) draft.row.remove();
         else {
@@ -1117,10 +1306,21 @@ async function sendMessage() {
     if (buffer.trim()) handleEvent(JSON.parse(buffer));
     if (streamError) showToast(streamError);
   } catch (error) {
+    if (!accepted && state.activeId === id) {
+      optimisticUser?.row.remove();
+      pendingAssistant?.row.remove();
+      if (!elements.messageInput.value) elements.messageInput.value = originalText;
+      if (!state.attachments.length) state.attachments = originalAttachments;
+      renderAttachments();
+      updateTextareaHeight();
+      updateEmptyState();
+    }
     showToast(error.message);
   } finally {
-    state.localStreamId = null;
-    state.runningId = null;
+    if (ownsLocalStream && state.localStreamId === id) {
+      state.localStreamId = null;
+      state.runningId = null;
+    }
     updateControls();
     try {
       await refreshSessions();
@@ -1171,9 +1371,12 @@ setInterval(async () => {
   backgroundPollBusy = true;
   try {
     await refreshMeetings(id);
+    await refreshPpts(id);
+    if (state.documents.some((document) => document.status === "processing")) await refreshDocuments(id);
     if (state.localStreamId === id) return;
     const { session } = await api(`/api/sessions/${id}`);
     if (state.activeId !== id) return;
+    renderContext(session.context);
     const fingerprint = JSON.stringify(session.messages.map((message) => [message.role, message.timestamp, message.text?.length, message.thinking?.length]));
     if (session.running) {
       state.runningId = id;
@@ -1216,11 +1419,15 @@ elements.imageInput.addEventListener("change", () => {
 });
 elements.boardToggle.addEventListener("click", () => {
   const open = document.body.classList.toggle("board-open");
-  if (open) document.body.classList.remove("meeting-open");
+  if (open) document.body.classList.remove("meeting-open", "ppt-open");
 });
 elements.meetingToggle.addEventListener("click", () => {
   const open = document.body.classList.toggle("meeting-open");
-  if (open) document.body.classList.remove("board-open");
+  if (open) document.body.classList.remove("board-open", "ppt-open");
+});
+elements.pptToggle.addEventListener("click", () => {
+  const open = document.body.classList.toggle("ppt-open");
+  if (open) document.body.classList.remove("board-open", "meeting-open");
 });
 elements.boardSearch.addEventListener("input", () => {
   const query = elements.boardSearch.value.trim();

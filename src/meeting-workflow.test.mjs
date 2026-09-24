@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "node:net";
 import { createMeetingStore } from "./meeting-store.mjs";
-import { createMeetingWorkflow, validateRisks } from "./meeting-workflow.mjs";
+import { createMeetingWorkflow, normalizePolicy, validateFacts } from "./meeting-workflow.mjs";
 
 const facts = {
   summary: "讨论供应商到货时间。",
@@ -18,12 +18,38 @@ const facts = {
   uncertainties: [],
 };
 
-async function fixture(analyzeJson, deliverMail) {
+function candidate(overrides = {}) {
+  return {
+    title: "到货依赖", hypothesis: "到货时间可能影响后续工作", category: "dependency",
+    evidence_lines: [2], question: "联调基准日期是什么", ...overrides,
+  };
+}
+
+function analyzer({ discovery = [], additions = [], todos = [], failKind, calls = [] } = {}) {
+  return async (kind, payload) => {
+    calls.push({ kind, policy: payload.analysisPolicy, candidates: payload.candidates });
+    if (kind === failKind) throw new Error("模拟分析失败");
+    if (kind === "facts") return facts;
+    if (kind === "discovery") return { candidates: discovery };
+    if (kind === "verification") return { results: payload.candidates.map((item) => ({
+      candidate_id: item.id, verdict: item.testVerdict || "verified", duplicate_of: "", reason: "对照原文核验",
+      missing_information: item.testVerdict === "uncertain" ? "缺少项目基准日期" : "",
+      supporting_lines: item.testVerdict === "rejected" ? [] : item.evidence_lines,
+      counter_evidence_lines: item.testVerdict === "rejected" ? [3] : [],
+    })) };
+    if (kind === "coverage") return { coverage_notes: [{ dimension: "交付", result: "已检查" }], candidates: additions };
+    if (kind === "todos") return { suggested_todos: todos };
+    if (kind === "email") return { subject: "项目风险", body: "请核实到货时间。" };
+    throw new Error(`未识别阶段 ${kind}`);
+  };
+}
+
+async function fixture(analyzeJson, options = {}) {
   const dataDir = await mkdtemp(join(tmpdir(), "meeting-workflow-"));
   const agentDir = join(dataDir, "agent");
   await mkdir(agentDir);
   const store = createMeetingStore(dataDir);
-  const workflow = await createMeetingWorkflow({ store, agentDir, modelId: null, analyzeJson, deliverMail });
+  const workflow = await createMeetingWorkflow({ store, agentDir, modelId: null, analyzeJson, ...options });
   const sessionId = "session-1";
   const text = "张三：讨论交付。\n李明：供应商预计10月15日到货。\n张三：李明联系供应商。";
   const meeting = await store.upload(sessionId, Readable.from([Buffer.from(text)]), "周会.txt", null);
@@ -31,7 +57,7 @@ async function fixture(analyzeJson, deliverMail) {
 }
 
 async function finished(workflow, sessionId, id) {
-  for (let attempt = 0; attempt < 50; attempt++) {
+  for (let attempt = 0; attempt < 100; attempt++) {
     const item = await workflow.get(sessionId, id);
     if (["completed", "awaiting_confirmation", "failed"].includes(item.status)) return item;
     await new Promise((resolve) => setTimeout(resolve, 10));
@@ -39,84 +65,171 @@ async function finished(workflow, sessionId, id) {
   throw new Error("后台任务未完成");
 }
 
-test("无风险会议结束，不生成风险邮件", async () => {
-  const scope = await fixture(async (kind) => kind === "facts" ? facts : { risks: [], suggested_todos: [] });
+test("无风险仍做补漏，保留明确待办并发送隐藏通知", async () => {
+  const calls = [];
+  const notices = [];
+  const scope = await fixture(analyzer({ calls }));
+  scope.workflow.setNotifier(async (...args) => notices.push(args));
   try {
-    assert.deepEqual(await scope.workflow.submit(scope.sessionId, scope.meeting.id), { job_id: scope.meeting.id, status: "queued" });
-    const item = await finished(scope.workflow, scope.sessionId, scope.meeting.id);
+    const submitted = await scope.workflow.submit(scope.sessionId, scope.meeting.id);
+    const item = await finished(scope.workflow, scope.sessionId, submitted.job_id);
     assert.equal(item.status, "completed");
     assert.equal(item.email, null);
     assert.equal(item.todos.explicit[0].task, "李明联系供应商");
+    assert.deepEqual(calls.map((call) => call.kind), ["facts", "discovery", "coverage"]);
+    assert.deepEqual(notices, [[scope.sessionId, submitted.job_id]]);
   } finally { await rm(scope.dataDir, { recursive: true, force: true }); }
 });
 
-test("重复上传同一会议复用任务，不生成第二份记录", async () => {
-  const scope = await fixture(async (kind) => kind === "facts" ? facts : { risks: [], suggested_todos: [] });
+test("同一 TXT 不同关注点独立保存，同一关注点复用", async () => {
+  const calls = [];
+  const scope = await fixture(analyzer({ calls }));
   try {
-    const duplicate = await scope.store.upload(scope.sessionId, Readable.from([Buffer.from(scope.meeting.rawText)]), "另一个文件名.txt", null);
+    const duplicate = await scope.store.upload(scope.sessionId, Readable.from([Buffer.from(scope.meeting.rawText)]), "重复.txt", null);
     assert.equal(duplicate.id, scope.meeting.id);
-    assert.equal((await scope.store.list(scope.sessionId)).length, 1);
+    const budget = await scope.workflow.submit(scope.sessionId, scope.meeting.id, {
+      risk_focus: ["预算异常"], risk_focus_source: "user", risk_focus_reason: "用户要求重点检查预算",
+    });
+    await finished(scope.workflow, scope.sessionId, budget.job_id);
+    const same = await scope.workflow.submit(scope.sessionId, scope.meeting.id, { risk_focus: ["预算异常"] });
+    assert.equal(same.job_id, budget.job_id);
+    const schedule = await scope.workflow.submit(scope.sessionId, scope.meeting.id, { risk_focus: ["交付节点"] });
+    assert.notEqual(schedule.job_id, budget.job_id);
+    const second = await finished(scope.workflow, scope.sessionId, schedule.job_id);
+    assert.equal(second.sourceMeetingId, scope.meeting.id);
+    assert.deepEqual(second.analysisPolicy.riskFocus, ["交付节点"]);
+    assert.deepEqual((await scope.workflow.get(scope.sessionId, budget.job_id)).analysisPolicy.riskFocus, ["预算异常"]);
+    assert.equal((await scope.store.list(scope.sessionId)).length, 2);
+    assert.ok(calls.filter((call) => call.kind === "discovery").every((call) => call.policy?.riskFocus.length === 1));
   } finally { await rm(scope.dataDir, { recursive: true, force: true }); }
 });
 
-test("有风险会议保留证据，确认后只发送一次", async () => {
-  const sent = [];
-  const scope = await fixture(async (kind) => {
-    if (kind === "facts") return facts;
-    if (kind === "risks") return {
-      risks: [{ title: "交付依赖", description: "供应商预计10月15日到货", category: "dependency", reason: "到货时间需要关注", uncertainty: "项目期限未知", evidence_lines: [2] }],
-      suggested_todos: [{ task: "确认交付计划", owner: "", deadline: "", reason: "到货时间存在不确定性", evidence_lines: [2] }],
-    };
-    return { subject: "交付风险", body: "请关注供应商预计10月15日到货。" };
-  }, async (message) => { sent.push(message); return { accepted: [message.to], messageId: "test-id" }; });
+test("候选经独立核验和补漏，排除反证，待办允许为空", async () => {
+  const calls = [];
+  const scope = await fixture(analyzer({
+    calls,
+    discovery: [candidate({ testVerdict: "rejected" })],
+    additions: [candidate({ title: "责任待确认", category: "ownership", evidence_lines: [3], testVerdict: "uncertain" })],
+  }));
   try {
-    await scope.workflow.submit(scope.sessionId, scope.meeting.id);
-    const item = await finished(scope.workflow, scope.sessionId, scope.meeting.id);
+    const submitted = await scope.workflow.submit(scope.sessionId, scope.meeting.id, { risk_focus: ["责任归属"] });
+    const item = await finished(scope.workflow, scope.sessionId, submitted.job_id);
     assert.equal(item.status, "awaiting_confirmation");
-    assert.deepEqual(item.analysis.risks[0].evidence_lines, [2]);
-    assert.equal(item.todos.suggested[0].owner, "");
-    const revised = await scope.workflow.updateDraft(scope.sessionId, scope.meeting.id, "修改后的标题", "修改后的正文");
-    assert.equal(revised.version, 2);
-    assert.equal(revised.revisions[0].subject, "交付风险");
-    const result = await scope.workflow.send(scope.sessionId, scope.meeting.id, "user@example.com");
-    assert.equal(result.status, "sent");
-    assert.equal(sent[0].subject, "修改后的标题");
-    await scope.workflow.send(scope.sessionId, scope.meeting.id, "another@example.com");
-    assert.equal(sent.length, 1);
+    assert.equal(item.analysis.review.verified.length, 2);
+    assert.equal(item.analysis.review.verified[0].verdict, "rejected");
+    assert.deepEqual(item.analysis.review.verified[0].counter_evidence_lines, [3]);
+    assert.equal(item.analysis.risks.length, 1);
+    assert.equal(item.analysis.risks[0].verdict, "uncertain");
+    assert.deepEqual(item.todos.suggested, []);
+    assert.equal(calls.filter((call) => call.kind === "verification").length, 2);
+    for (const call of calls.filter((item) => ["discovery", "verification", "coverage"].includes(item.kind))) {
+      assert.deepEqual(call.policy.riskFocus, ["责任归属"]);
+    }
   } finally { await rm(scope.dataDir, { recursive: true, force: true }); }
 });
 
-test("风险行号不能超出会议原文", () => {
-  assert.throws(() => validateRisks({
-    risks: [{ title: "x", description: "x", category: "other", reason: "x", uncertainty: "", evidence_lines: [999] }],
-    suggested_todos: [],
-  }, 3), /行号超出原文/);
-});
-
-test("并发确认发送只允许一封邮件", async () => {
-  let release;
-  const gate = new Promise((resolve) => { release = resolve; });
+test("草稿可清空且不可发送，补全后只发送一次", async () => {
   const sent = [];
-  const scope = await fixture(async (kind) => kind === "facts" ? facts : kind === "risks" ? {
-    risks: [{ title: "供货依赖", description: "预计到货时间不确定", category: "dependency", reason: "需核实", uncertainty: "实际日期", evidence_lines: [2] }],
-    suggested_todos: [],
-  } : { subject: "风险通知", body: "请核实到货时间。" }, async (message) => {
-    sent.push(message);
-    await gate;
-    return { accepted: [message.to], messageId: "one" };
+  const scope = await fixture(analyzer({ discovery: [candidate()] }), {
+    deliverMail: async (message) => { sent.push(message); return { accepted: [message.to], messageId: "test-id" }; },
   });
   try {
-    await scope.workflow.submit(scope.sessionId, scope.meeting.id);
-    await finished(scope.workflow, scope.sessionId, scope.meeting.id);
-    const first = scope.workflow.send(scope.sessionId, scope.meeting.id, "one@example.com");
-    await assert.rejects(scope.workflow.send(scope.sessionId, scope.meeting.id, "two@example.com"), /正在发送/);
-    release();
-    await first;
+    const submitted = await scope.workflow.submit(scope.sessionId, scope.meeting.id);
+    await finished(scope.workflow, scope.sessionId, submitted.job_id);
+    const empty = await scope.workflow.updateDraft(scope.sessionId, submitted.job_id, "", "");
+    assert.equal(empty.version, 2);
+    assert.equal(empty.status, "incomplete");
+    assert.equal(empty.revisions[0].subject, "项目风险");
+    await assert.rejects(scope.workflow.send(scope.sessionId, submitted.job_id, "user@example.com"), /未完成/);
+    await scope.workflow.updateDraft(scope.sessionId, submitted.job_id, "新版标题", "新版正文");
+    const result = await scope.workflow.send(scope.sessionId, submitted.job_id, "user@example.com");
+    assert.equal(result.status, "sent");
+    assert.equal(sent[0].subject, "新版标题");
+    await scope.workflow.send(scope.sessionId, submitted.job_id, "other@example.com");
     assert.equal(sent.length, 1);
   } finally { await rm(scope.dataDir, { recursive: true, force: true }); }
 });
 
-test("真实 SMTP 传输提交邮件并记录服务器接受结果", async () => {
+test("会议本身无风险时，带会议行和 PDF 原页的补充可创建草稿", async () => {
+  const documents = { async requireDocument(_sessionId, id) {
+    assert.equal(id, "pdf-1");
+    return { status: "ready", pageCount: 5 };
+  } };
+  const scope = await fixture(analyzer(), { documents });
+  try {
+    const submitted = await scope.workflow.submit(scope.sessionId, scope.meeting.id);
+    await finished(scope.workflow, scope.sessionId, submitted.job_id);
+    await assert.rejects(scope.workflow.updateDraft(scope.sessionId, submitted.job_id, "标题", "正文"), /背景补充/);
+    await scope.workflow.updateDraft(scope.sessionId, submitted.job_id, "交付冲突", "请核实排期。", {
+      content: "会议预计 15 日到货，PDF 第 2 页写明 10 日验收。",
+      meeting_lines: [2], pdf_sources: [{ document_id: "pdf-1", page: 2 }],
+    });
+    const item = await scope.workflow.get(scope.sessionId, submitted.job_id);
+    assert.equal(item.analysis.risks.length, 0);
+    assert.equal(item.agentEnrichments.length, 1);
+    assert.equal(item.email.source, "agent_enrichment");
+    assert.equal(item.status, "awaiting_confirmation");
+  } finally { await rm(scope.dataDir, { recursive: true, force: true }); }
+});
+
+test("分析失败也通知；非法核验行号使任务失败", async () => {
+  const notices = [];
+  const scope = await fixture(async (kind, payload) => {
+    if (kind === "verification") return { results: [{
+      candidate_id: payload.candidates[0].id, verdict: "verified", duplicate_of: "", reason: "错误行号",
+      missing_information: "", supporting_lines: [999], counter_evidence_lines: [],
+    }] };
+    return analyzer({ discovery: [candidate()] })(kind, payload);
+  });
+  scope.workflow.setNotifier(async (...args) => notices.push(args));
+  try {
+    const submitted = await scope.workflow.submit(scope.sessionId, scope.meeting.id);
+    const item = await finished(scope.workflow, scope.sessionId, submitted.job_id);
+    assert.equal(item.status, "failed");
+    assert.match(item.error, /行号超出原文/);
+    assert.deepEqual(notices, [[scope.sessionId, submitted.job_id]]);
+  } finally { await rm(scope.dataDir, { recursive: true, force: true }); }
+});
+
+test("SMTP 预检失败保留草稿，修复后可重试", async () => {
+  let available = false;
+  const sent = [];
+  const scope = await fixture(analyzer({ discovery: [candidate()] }), {
+    verifyMail: async () => { if (!available) throw new Error("认证失败"); },
+    deliverMail: async (message) => { sent.push(message); return { accepted: [message.to], messageId: "retry" }; },
+  });
+  try {
+    const submitted = await scope.workflow.submit(scope.sessionId, scope.meeting.id);
+    await finished(scope.workflow, scope.sessionId, submitted.job_id);
+    await assert.rejects(scope.workflow.send(scope.sessionId, submitted.job_id, "user@example.com"), /认证失败/);
+    assert.equal((await scope.workflow.get(scope.sessionId, submitted.job_id)).email.status, "draft");
+    available = true;
+    assert.equal((await scope.workflow.send(scope.sessionId, submitted.job_id, "user@example.com")).status, "sent");
+    assert.equal(sent.length, 1);
+  } finally { await rm(scope.dataDir, { recursive: true, force: true }); }
+});
+
+test("发送结果不明时不自动重发，人工确认后才恢复", async () => {
+  let fail = true;
+  const scope = await fixture(analyzer({ discovery: [candidate()] }), {
+    deliverMail: async (message) => {
+      if (fail) throw new Error("DATA 后断线");
+      return { accepted: [message.to], messageId: "recovered" };
+    },
+  });
+  try {
+    const submitted = await scope.workflow.submit(scope.sessionId, scope.meeting.id);
+    await finished(scope.workflow, scope.sessionId, submitted.job_id);
+    await assert.rejects(scope.workflow.send(scope.sessionId, submitted.job_id, "user@example.com"), /DATA 后断线/);
+    assert.equal((await scope.workflow.get(scope.sessionId, submitted.job_id)).email.status, "delivery_unknown");
+    await assert.rejects(scope.workflow.send(scope.sessionId, submitted.job_id, "user@example.com"), /人工核查/);
+    fail = false;
+    await scope.workflow.acknowledgeUndelivered(scope.sessionId, submitted.job_id);
+    assert.equal((await scope.workflow.send(scope.sessionId, submitted.job_id, "user@example.com")).status, "sent");
+  } finally { await rm(scope.dataDir, { recursive: true, force: true }); }
+});
+
+test("本地 SMTP 接受邮件并记录结果", async () => {
   const received = [];
   const server = createServer((socket) => {
     socket.write("220 local-test ESMTP\r\n");
@@ -139,37 +252,31 @@ test("真实 SMTP 传输提交邮件并记录服务器接受结果", async () =>
     });
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const previous = {
-    host: process.env.MEETING_SMTP_HOST, port: process.env.MEETING_SMTP_PORT,
-    from: process.env.MEETING_SMTP_FROM, user: process.env.MEETING_SMTP_USER,
-  };
+  const previous = Object.fromEntries(["HOST", "PORT", "FROM", "USER"].map((key) => [key, process.env[`MEETING_SMTP_${key}`]]));
   process.env.MEETING_SMTP_HOST = "127.0.0.1";
   process.env.MEETING_SMTP_PORT = String(server.address().port);
   process.env.MEETING_SMTP_FROM = "demo@example.test";
   delete process.env.MEETING_SMTP_USER;
-  const scope = await fixture(async (kind) => kind === "facts" ? facts : kind === "risks" ? {
-    risks: [{ title: "供货依赖", description: "预计到货时间待确认", category: "dependency", reason: "需核实", uncertainty: "实际日期", evidence_lines: [2] }],
-    suggested_todos: [],
-  } : { subject: "项目风险", body: "请核实到货时间。" });
+  const scope = await fixture(analyzer({ discovery: [candidate()] }));
   try {
-    await scope.workflow.submit(scope.sessionId, scope.meeting.id);
-    await finished(scope.workflow, scope.sessionId, scope.meeting.id);
-    const result = await scope.workflow.send(scope.sessionId, scope.meeting.id, "recipient@example.test");
-    assert.equal(result.status, "sent");
+    const submitted = await scope.workflow.submit(scope.sessionId, scope.meeting.id);
+    await finished(scope.workflow, scope.sessionId, submitted.job_id);
+    assert.equal((await scope.workflow.send(scope.sessionId, submitted.job_id, "recipient@example.test")).status, "sent");
     assert.match(received.join("\n"), /recipient@example.test/);
-    assert.equal((await scope.workflow.get(scope.sessionId, scope.meeting.id)).email.status, "sent");
   } finally {
     await rm(scope.dataDir, { recursive: true, force: true });
     await new Promise((resolve) => server.close(resolve));
     for (const [key, value] of Object.entries(previous)) {
-      const name = `MEETING_SMTP_${key.toUpperCase()}`;
-      if (value === undefined) delete process.env[name]; else process.env[name] = value;
+      if (value === undefined) delete process.env[`MEETING_SMTP_${key}`];
+      else process.env[`MEETING_SMTP_${key}`] = value;
     }
   }
 });
 
-test("重启恢复排队任务，发送中断时不自动重发", async () => {
-  const scope = await fixture(async (kind) => kind === "facts" ? facts : { risks: [], suggested_todos: [] });
+test("规则输入和恢复状态有明确边界", async () => {
+  assert.throws(() => normalizePolicy({ risk_focus: ["x".repeat(101)] }), /审查重点/);
+  assert.throws(() => normalizePolicy({ risk_focus: ["10月10日验收冲突"], risk_focus_source: "agent" }), /风险维度/);
+  const scope = await fixture(analyzer());
   try {
     await scope.store.update(scope.sessionId, scope.meeting.id, { status: "queued" });
     await scope.workflow.recover();
@@ -182,4 +289,28 @@ test("重启恢复排队任务，发送中断时不自动重发", async () => {
     assert.equal(recovered.status, "failed");
     assert.equal(recovered.email.status, "delivery_unknown");
   } finally { await rm(scope.dataDir, { recursive: true, force: true }); }
+});
+
+test("重启后从已保存的风险核验结果继续，不重做前面阶段", async () => {
+  const scope = await fixture(analyzer({ discovery: [candidate()], failKind: "coverage" }));
+  try {
+    const submitted = await scope.workflow.submit(scope.sessionId, scope.meeting.id);
+    const failed = await finished(scope.workflow, scope.sessionId, submitted.job_id);
+    assert.equal(failed.status, "failed");
+    assert.equal(failed.analysis.review.verified.length, 1);
+    await scope.store.update(scope.sessionId, submitted.job_id, { status: "checking_coverage", error: null });
+    const calls = [];
+    const restarted = await createMeetingWorkflow({
+      store: scope.store, agentDir: join(scope.dataDir, "agent"), modelId: null,
+      analyzeJson: analyzer({ calls }),
+    });
+    await restarted.recover();
+    const resumed = await finished(restarted, scope.sessionId, submitted.job_id);
+    assert.equal(resumed.status, "awaiting_confirmation");
+    assert.deepEqual(calls.map((call) => call.kind), ["coverage", "todos", "email"]);
+  } finally { await rm(scope.dataDir, { recursive: true, force: true }); }
+});
+
+test("事实记录必须带原文行号", () => {
+  assert.throws(() => validateFacts({ ...facts, facts: [{ content: "未提供依据", evidence_lines: [] }] }, 3), /缺少原文依据/);
 });

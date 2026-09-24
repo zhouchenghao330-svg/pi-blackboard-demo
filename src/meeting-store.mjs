@@ -18,6 +18,7 @@ export function numberedLines(text) {
 export function createMeetingStore(dataDir) {
   const directory = join(dataDir, "meetings");
   const writes = new Map();
+  const updates = new Map();
 
   async function save(record) {
     await mkdir(directory, { recursive: true });
@@ -54,7 +55,8 @@ export function createMeetingStore(dataDir) {
     const names = await readdir(directory).catch((error) => error.code === "ENOENT" ? [] : Promise.reject(error));
     const records = await Promise.all(names.filter((name) => ID.test(name.slice(0, -5)) && name.endsWith(".json"))
       .map((name) => get(sessionId, name.slice(0, -5))));
-    return records.filter(Boolean).sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt));
+    return records.filter(Boolean).sort((a, b) =>
+      (b.analysisCreatedAt || b.uploadedAt).localeCompare(a.analysisCreatedAt || a.uploadedAt));
   }
 
   return {
@@ -73,7 +75,7 @@ export function createMeetingStore(dataDir) {
       if (!text.trim() || text.length > MAX_CHARS || text.includes("\0")) throw bad("会议 TXT 应为 1–40000 个有效字符");
       if (meetingTime && (typeof meetingTime !== "string" || Number.isNaN(Date.parse(meetingTime)))) throw bad("会议时间无效");
       const sha256 = createHash("sha256").update(bytes).digest("hex");
-      const existing = (await listRecords(sessionId)).find((item) => item.sha256 === sha256 && item.meetingTime === (meetingTime || null));
+      const existing = (await listRecords(sessionId)).find((item) => !item.sourceMeetingId && item.sha256 === sha256 && item.meetingTime === (meetingTime || null));
       if (existing) return existing;
       const id = randomUUID();
       const record = {
@@ -88,19 +90,41 @@ export function createMeetingStore(dataDir) {
       return record;
     },
     list: listRecords,
+    async createAnalysisRun(sessionId, sourceId, analysisPolicy) {
+      const source = await requireMeeting(sessionId, sourceId);
+      const id = randomUUID();
+      const now = new Date().toISOString();
+      const record = {
+        id, sourceMeetingId: source.sourceMeetingId || source.id,
+        sessionId, name: source.name, uploadedAt: source.uploadedAt,
+        analysisCreatedAt: now, meetingTime: source.meetingTime,
+        bytes: source.bytes, sha256: source.sha256, lineCount: source.lineCount,
+        rawText: source.rawText, analysisPolicy, status: "uploaded", progress: 0,
+        analysis: null, todos: null, email: null, agentEnrichments: [], error: null,
+        history: [{ status: "uploaded", at: now }],
+      };
+      await save(record);
+      return record;
+    },
     async all() {
       const names = await readdir(directory).catch((error) => error.code === "ENOENT" ? [] : Promise.reject(error));
       return Promise.all(names.filter((name) => ID.test(name.slice(0, -5)) && name.endsWith(".json"))
         .map(async (name) => JSON.parse(await readFile(join(directory, name), "utf8"))));
     },
     async update(sessionId, id, changes) {
-      const current = await requireMeeting(sessionId, id);
-      const now = new Date().toISOString();
-      const record = { ...current, ...changes, updatedAt: now };
-      if (changes.status && changes.status !== current.status) {
-        record.history = [...current.history, { status: changes.status, at: now }];
-      }
-      return save(record);
+      const previous = updates.get(id) || Promise.resolve();
+      const pending = previous.catch(() => {}).then(async () => {
+        const current = await requireMeeting(sessionId, id);
+        const now = new Date().toISOString();
+        const record = { ...current, ...changes, updatedAt: now };
+        if (changes.status && changes.status !== current.status) {
+          record.history = [...current.history, { status: changes.status, at: now }];
+        }
+        return save(record);
+      });
+      updates.set(id, pending);
+      try { return await pending; }
+      finally { if (updates.get(id) === pending) updates.delete(id); }
     },
   };
 }

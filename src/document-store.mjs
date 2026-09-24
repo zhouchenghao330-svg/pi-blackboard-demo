@@ -11,12 +11,17 @@ function run(command, args) {
     const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
     const chunks = [];
     let stderr = "";
+    let timedOut = false;
+    const timeout = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, 60_000);
     child.stdout.on("data", (chunk) => chunks.push(chunk));
     child.stderr.on("data", (chunk) => { stderr += chunk; });
-    child.on("error", reject);
-    child.on("close", (code) => code === 0
-      ? resolve(Buffer.concat(chunks).toString("utf8"))
-      : reject(new Error(`${command} 退出 ${code}: ${stderr.trim()}`)));
+    child.on("error", (error) => { clearTimeout(timeout); reject(error); });
+    child.on("close", (code) => {
+      clearTimeout(timeout);
+      if (timedOut) reject(new Error(`${command} 超过 60 秒`));
+      else if (code === 0) resolve(Buffer.concat(chunks).toString("utf8"));
+      else reject(new Error(`${command} 退出 ${code}: ${stderr.trim()}`));
+    });
   });
 }
 
@@ -25,6 +30,7 @@ export function createDocumentStore(dataDir) {
   const outputsDir = join(dataDir, "outputs");
   const detailRenders = new Map();
   const textIndexes = new Map();
+  const writes = new Map();
 
   async function textIndex(sessionId, id) {
     const document = await requireDocument(sessionId, id);
@@ -41,8 +47,15 @@ export function createDocumentStore(dataDir) {
         let pages = raw.split("\f");
         if (pages.at(-1) === "") pages.pop();
         if (pages.length !== document.pageCount) {
-          pages = await Promise.all(Array.from({ length: document.pageCount }, (_, index) =>
-            run("pdftotext", ["-f", String(index + 1), "-l", String(index + 1), "-layout", "-enc", "UTF-8", join(uploadsDir, `${id}.pdf`), "-"])));
+          pages = new Array(document.pageCount);
+          let nextPage = 0;
+          await Promise.all(Array.from({ length: Math.min(4, document.pageCount) }, async () => {
+            while (nextPage < document.pageCount) {
+              const index = nextPage++;
+              pages[index] = await run("pdftotext", ["-f", String(index + 1), "-l", String(index + 1),
+                "-layout", "-enc", "UTF-8", join(uploadsDir, `${id}.pdf`), "-"]);
+            }
+          }));
         }
         const index = { source: "pdf_text_layer", pages: pages.map((text, offset) => ({ page: offset + 1, text: text.trim() })) };
         await writeFile(cache, `${JSON.stringify(index)}\n`);
@@ -133,9 +146,21 @@ export function createDocumentStore(dataDir) {
       return documents.filter(Boolean).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
     },
 
+    async all() {
+      const names = await readdir(uploadsDir).catch((error) => error.code === "ENOENT" ? [] : Promise.reject(error));
+      return Promise.all(names.filter((name) => name.endsWith(".json") && ID.test(name.slice(0, -5)))
+        .map(async (name) => JSON.parse(await readFile(join(uploadsDir, name), "utf8"))));
+    },
+
     async update(sessionId, id, changes) {
-      const document = await requireDocument(sessionId, id);
-      return save({ ...document, ...changes, updatedAt: new Date().toISOString() });
+      const previous = writes.get(id) || Promise.resolve();
+      const pending = previous.catch(() => {}).then(async () => {
+        const document = await requireDocument(sessionId, id);
+        return save({ ...document, ...changes, updatedAt: new Date().toISOString() });
+      });
+      writes.set(id, pending);
+      try { return await pending; }
+      finally { if (writes.get(id) === pending) writes.delete(id); }
     },
 
     async board(sessionId, id) {

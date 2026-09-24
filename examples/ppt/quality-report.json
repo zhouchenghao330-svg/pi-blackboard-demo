@@ -1,0 +1,233 @@
+{
+  "schema": "ppt-master.svg-quality-report.v1",
+  "stage": "final",
+  "target": "/data/ppt-projects/ppt_d8f8bfef99a44c92b395f779e430e8b8_20260924",
+  "source_fingerprint": {
+    "algorithm": "sha256",
+    "digest": "7f26a17926203318e5283d8716f24410eb449e8e778a3d9c8e911ab2694bbe5d",
+    "file_count": 2,
+    "files": [
+      {
+        "file": "01_pi_pdf_blackboard.svg",
+        "sha256": "ac9fe55641602624fc87485c26dceae5edab7727f0660c1d6d7e6e5666b537f3"
+      },
+      {
+        "file": "02_meeting_email.svg",
+        "sha256": "4634da603668358f21232cbb8b5b726c7ca214cd8b32b4be4f47a3f37f609f96"
+      }
+    ]
+  },
+  "summary": {
+    "total": 2,
+    "passed": 2,
+    "warnings": 0,
+    "errors": 0
+  },
+  "issue_types": {},
+  "categories": {
+    "blocking": {
+      "count": 0,
+      "issues": []
+    },
+    "introduced": {
+      "count": 0,
+      "issues": []
+    },
+    "inherited": {
+      "count": 0,
+      "issues": []
+    },
+    "source-import": {
+      "count": 0,
+      "summary": {
+        "warning_count": 0,
+        "by_code": {}
+      }
+    }
+  },
+  "drift": {
+    "colors": {},
+    "fonts": {},
+    "sizes": {}
+  },
+  "carrier_receipt": {
+    "scope": "informational-not-a-quota",
+    "pages": 2,
+    "totals": {
+      "text_elements": 42,
+      "image_placements": 0,
+      "icons": 12,
+      "svg_geometry_elements": 15,
+      "preset_shapes": 5,
+      "page_frame_elements": 4,
+      "marker_uses": 1,
+      "inline_emphasis_runs": 0,
+      "gradient_uses": 0,
+      "filter_uses": 0,
+      "text_effects": 0
+    },
+    "pages_with": {
+      "images": 0,
+      "icons": 2,
+      "presets": 2,
+      "charts": 0,
+      "tables": 0,
+      "formulas": 0,
+      "inline_emphasis_runs": 0,
+      "gradient_uses": 0,
+      "filter_uses": 0,
+      "text_effects": 0
+    },
+    "relationship_pages": null,
+    "geometry_elements": {
+      "circle": 0,
+      "ellipse": 0,
+      "line": 5,
+      "path": 0,
+      "polygon": 0,
+      "polyline": 0,
+      "rect": 10
+    },
+    "preset_names": {
+      "chevron": 2,
+      "homePlate": 3
+    },
+    "native_objects": {
+      "chart": 0,
+      "formula_block": 0,
+      "formula_inline": 0,
+      "other": 0,
+      "table": 0
+    },
+    "image_page_max_frame_share_range": []
+  },
+  "project_issues": {
+    "template": [],
+    "animation": [],
+    "illustration": [],
+    "communication_trace": [],
+    "pptx_structure": []
+  },
+  "files": [
+    {
+      "file": "01_pi_pdf_blackboard.svg",
+      "path": "svg_output/01_pi_pdf_blackboard.svg",
+      "exists": true,
+      "errors": [],
+      "warnings": [],
+      "info": {
+        "viewbox": "0 0 1280 720",
+        "carrier_receipt": {
+          "text_elements": 19,
+          "images": {
+            "placements": 0,
+            "files": [],
+            "max_frame_share": 0.0
+          },
+          "icons": 5,
+          "effects": {
+            "inline_emphasis_runs": 0,
+            "gradient_uses": 0,
+            "filter_uses": 0,
+            "text_effects": 0
+          },
+          "geometry": {
+            "svg_elements": {
+              "rect": 3,
+              "circle": 0,
+              "ellipse": 0,
+              "line": 1,
+              "polyline": 0,
+              "polygon": 0,
+              "path": 0
+            },
+            "preset_shapes": 2,
+            "preset_names": {
+              "chevron": 2
+            },
+            "page_frame_elements": 2,
+            "marker_uses": {
+              "start": 0,
+              "mid": 0,
+              "end": 0
+            }
+          },
+          "native_objects": {
+            "chart": 0,
+            "table": 0,
+            "formula_block": 0,
+            "formula_inline": 0,
+            "other": 0
+          }
+        },
+        "fonts": [
+          "Microsoft YaHei"
+        ],
+        "text_elements": 19,
+        "tspan_elements": 1
+      },
+      "passed": true,
+      "source_sha256": "ac9fe55641602624fc87485c26dceae5edab7727f0660c1d6d7e6e5666b537f3"
+    },
+    {
+      "file": "02_meeting_email.svg",
+      "path": "svg_output/02_meeting_email.svg",
+      "exists": true,
+      "errors": [],
+      "warnings": [],
+      "info": {
+        "viewbox": "0 0 1280 720",
+        "carrier_receipt": {
+          "text_elements": 23,
+          "images": {
+            "placements": 0,
+            "files": [],
+            "max_frame_share": 0.0
+          },
+          "icons": 7,
+          "effects": {
+            "inline_emphasis_runs": 0,
+            "gradient_uses": 0,
+            "filter_uses": 0,
+            "text_effects": 0
+          },
+          "geometry": {
+            "svg_elements": {
+              "rect": 7,
+              "circle": 0,
+              "ellipse": 0,
+              "line": 4,
+              "polyline": 0,
+              "polygon": 0,
+              "path": 0
+            },
+            "preset_shapes": 3,
+            "preset_names": {
+              "homePlate": 3
+            },
+            "page_frame_elements": 2,
+            "marker_uses": {
+              "start": 0,
+              "mid": 0,
+              "end": 1
+            }
+          },
+          "native_objects": {
+            "chart": 0,
+            "table": 0,
+            "formula_block": 0,
+            "formula_inline": 0,
+            "other": 0
+          }
+        },
+        "fonts": [
+          "Microsoft YaHei"
+        ],
+        "text_elements": 23,
+        "tspan_elements": 3
+      },
+      "passed": true,
+      "source_sha256": "4634da603668358f21232cbb8b5b726c7ca214cd8b32b4be4f47a3f37f609f96"
+    }
+  ]
+}

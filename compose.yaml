@@ -11,12 +11,14 @@ services:
       MAX_PDF_PAGES: ${MAX_PDF_PAGES:-100}
       DEMO_MODEL_BASE_URL: ${DEMO_MODEL_BASE_URL:-}
       DEMO_MODEL_ID: ${DEMO_MODEL_ID:-}
+      DEMO_MODEL_CONTEXT_WINDOW: ${DEMO_MODEL_CONTEXT_WINDOW:-}
       DEMO_MODEL_API: ${DEMO_MODEL_API:-openai-completions}
       DEMO_MODEL_API_KEY: ${DEMO_MODEL_API_KEY:-}
       DEMO_MODEL_VISION: ${DEMO_MODEL_VISION:-true}
       DEMO_MODEL_REASONING: ${DEMO_MODEL_REASONING:-true}
       DEMO_MODEL_THINKING_FORMAT: ${DEMO_MODEL_THINKING_FORMAT:-qwen-chat-template}
       DEMO_MODEL_THINKING_BUDGET_FIELD: ${DEMO_MODEL_THINKING_BUDGET_FIELD:-thinking_token_budget}
+      TAVILY_API_KEY: ${TAVILY_API_KEY:-}
       MEETING_SMTP_HOST: ${MEETING_SMTP_HOST:-}
       MEETING_SMTP_PORT: ${MEETING_SMTP_PORT:-587}
       MEETING_SMTP_USER: ${MEETING_SMTP_USER:-}
@@ -30,6 +32,27 @@ services:
       timeout: 3s
       retries: 3
       start_period: 10s
+
+  ppt-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.ppt
+    init: true
+    environment:
+      PI_CODING_AGENT_DIR: /data/ppt-pi-agent
+      DEMO_DATA_DIR: /data
+      PPT_MASTER_SKILL_DIR: /opt/ppt-master/skills/ppt-master
+      DEMO_MODEL_BASE_URL: ${DEMO_MODEL_BASE_URL:-}
+      DEMO_MODEL_ID: ${DEMO_MODEL_ID:-}
+      DEMO_MODEL_CONTEXT_WINDOW: ${DEMO_MODEL_CONTEXT_WINDOW:-}
+      DEMO_MODEL_API: ${DEMO_MODEL_API:-openai-completions}
+      DEMO_MODEL_API_KEY: ${DEMO_MODEL_API_KEY:-}
+      DEMO_MODEL_VISION: ${DEMO_MODEL_VISION:-true}
+      DEMO_MODEL_REASONING: ${DEMO_MODEL_REASONING:-true}
+      DEMO_MODEL_THINKING_FORMAT: ${DEMO_MODEL_THINKING_FORMAT:-qwen-chat-template}
+      DEMO_MODEL_THINKING_BUDGET_FIELD: ${DEMO_MODEL_THINKING_BUDGET_FIELD:-thinking_token_budget}
+    volumes:
+      - demo_data:/data
 
 volumes:
   demo_data:

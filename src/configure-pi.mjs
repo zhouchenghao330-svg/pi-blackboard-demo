@@ -17,9 +17,15 @@ export async function configurePi() {
   if (!baseUrl || !modelId) {
     throw new Error("Set both DEMO_MODEL_BASE_URL and DEMO_MODEL_ID");
   }
+  const contextWindow = Number(process.env.DEMO_MODEL_CONTEXT_WINDOW ||
+    (modelId === "deepseek-flash" ? 262_144 : 0));
+  if (!Number.isSafeInteger(contextWindow) || contextWindow < 0) {
+    throw new Error("DEMO_MODEL_CONTEXT_WINDOW must be a non-negative integer");
+  }
 
   const model = {
     id: modelId,
+    ...(contextWindow ? { contextWindow } : {}),
     input: process.env.DEMO_MODEL_VISION === "false" ? ["text"] : ["text", "image"],
     reasoning: process.env.DEMO_MODEL_REASONING !== "false",
     compat: {

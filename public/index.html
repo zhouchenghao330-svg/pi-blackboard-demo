@@ -54,8 +54,13 @@
             </div>
           </div>
           <div class="topbar-right">
+            <div class="context-meter" id="contextMeter" hidden title="主 Agent 距自动压缩阈值的剩余上下文（估算）">
+              <span id="contextLabel">上下文计算中</span>
+              <span class="context-meter-track"><span id="contextMeterFill"></span></span>
+            </div>
             <button class="board-toggle" id="boardToggle" type="button" aria-label="切换 Blackboard 面板">Blackboard</button>
             <button class="board-toggle" id="meetingToggle" type="button" aria-label="切换会议面板">会议</button>
+            <button class="board-toggle" id="pptToggle" type="button" aria-label="切换 PPT 面板">PPT</button>
             <span class="connection-pill" id="connectionPill"><span></span><span id="connectionText">连接中</span></span>
             <span class="model-pill" id="modelPill">模型加载中</span>
           </div>
@@ -144,6 +149,12 @@
           <p class="board-subtitle">会议只依据 TXT 分析。风险与待办可按原文行号核对。</p>
           <div class="meeting-list" id="meetingList"></div>
           <div class="meeting-content" id="meetingContent"><div class="board-empty"><strong>还没有会议</strong><p>在对话框上传会议 TXT，Agent 会提交后台分析。</p></div></div>
+        </aside>
+        <aside class="ppt-panel" id="pptPanel" aria-label="PPT 制作">
+          <div class="meeting-header"><span class="board-eyebrow">PRESENTATION WORKFLOW</span><h2>PPT 工作台</h2></div>
+          <p class="board-subtitle">在对话中说明主题、受众和页数。后台制作完成后可下载可编辑 PPTX。</p>
+          <div class="meeting-list" id="pptList"></div>
+          <div class="meeting-content" id="pptContent"><div class="board-empty"><strong>还没有 PPT</strong><p>试着说：“用项目背景和会议结果做 6 页汇报 PPT。”</p></div></div>
         </aside>
         </div>
       </main>

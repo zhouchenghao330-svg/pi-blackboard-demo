@@ -1,0 +1,8 @@
+.git
+.env
+node_modules
+data
+*.log
+labs/results
+labs/.DS_Store
+examples

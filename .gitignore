@@ -1,5 +1,6 @@
 .env
 node_modules/
-data/
+/data/
 *.log
 labs/results/
+.DS_Store

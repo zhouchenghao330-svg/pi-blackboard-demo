@@ -1,12 +1,15 @@
+import { createReadStream } from "node:fs";
 import { createServer } from "node:http";
-import { mkdir, readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, readFile, stat } from "node:fs/promises";
+import { join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createAgentService } from "./agent-service.mjs";
 import { configurePi } from "./configure-pi.mjs";
 import { createDocumentStore } from "./document-store.mjs";
 import { createMeetingStore } from "./meeting-store.mjs";
 import { createMeetingWorkflow } from "./meeting-workflow.mjs";
+import { createPdfService } from "./pdf-service.mjs";
+import { createPptStore } from "./ppt-store.mjs";
 
 const dataDir = process.env.DEMO_DATA_DIR || "/data";
 const agentDir = process.env.PI_CODING_AGENT_DIR || join(dataDir, "pi-agent");
@@ -16,11 +19,24 @@ await Promise.all([
 ]);
 const configuredModel = await configurePi();
 const documents = createDocumentStore(dataDir);
+const pdfService = createPdfService(documents);
 const meetings = createMeetingStore(dataDir);
-const meetingWorkflow = await createMeetingWorkflow({ store: meetings, agentDir, modelId: configuredModel.modelId });
-const agent = await createAgentService({ dataDir, agentDir, modelId: configuredModel.modelId, documents, meetings, meetingWorkflow });
+const ppts = createPptStore(dataDir);
+const meetingWorkflow = await createMeetingWorkflow({ store: meetings, documents, agentDir, modelId: configuredModel.modelId });
+const agent = await createAgentService({ dataDir, agentDir, modelId: configuredModel.modelId, documents, meetings, meetingWorkflow, pdfService, ppts });
 meetingWorkflow.setNotifier(agent.notifyMeeting);
 await meetingWorkflow.recover();
+void pdfService.recover().catch((error) => console.error("PDF recovery failed:", error));
+const notifiedPpts = new Set((await ppts.all()).filter((job) => ["ready", "failed"].includes(job.status)).map((job) => job.id));
+setInterval(async () => {
+  try {
+    for (const job of await ppts.all()) {
+      if (!["ready", "failed"].includes(job.status) || notifiedPpts.has(job.id)) continue;
+      notifiedPpts.add(job.id);
+      await agent.notifyPpt(job.sessionId, job.id);
+    }
+  } catch (error) { console.error("PPT completion poll failed", error); }
+}, 2000);
 const publicDir = fileURLToPath(new URL("../public/", import.meta.url));
 const port = Number(process.env.PORT || 3000);
 
@@ -37,6 +53,14 @@ function json(response, status, body) {
     "cache-control": "no-store",
   });
   response.end(JSON.stringify(body));
+}
+
+function presentPpt(job) {
+  return {
+    id: job.id, brief: job.brief, pageCount: job.pageCount, pagesCreated: job.pagesCreated,
+    status: job.status, progress: job.progress, createdAt: job.createdAt,
+    updatedAt: job.updatedAt, filename: job.filename || null, error: job.error,
+  };
 }
 
 async function readJson(request) {
@@ -151,6 +175,37 @@ async function route(request, response) {
       json(response, 200, { meetings: items.map(({ rawText, ...item }) => item) });
       return;
     }
+    if (method === "GET" && parts[3] === "ppts" && parts.length === 4) {
+      if (!await agent.getSession(id)) { json(response, 404, { error: "会话不存在" }); return; }
+      json(response, 200, { jobs: (await ppts.list(id)).map(presentPpt) });
+      return;
+    }
+    if (method === "POST" && parts[3] === "ppts" && parts.length === 4) {
+      if (!await agent.getSession(id)) { json(response, 404, { error: "会话不存在" }); return; }
+      json(response, 202, { job: presentPpt(await ppts.submit(id, await readJson(request))) });
+      return;
+    }
+    if (method === "GET" && parts[3] === "ppts" && /^[0-9a-f-]{36}$/i.test(parts[4] || "") && parts.length === 5) {
+      json(response, 200, { job: presentPpt(await ppts.requireJob(id, parts[4])) });
+      return;
+    }
+    if (method === "GET" && parts[3] === "ppts" && /^[0-9a-f-]{36}$/i.test(parts[4] || "") && parts[5] === "download" && parts.length === 6) {
+      const job = await ppts.requireJob(id, parts[4]);
+      const root = resolve(join(dataDir, "ppt-projects"));
+      const output = job.outputPath && resolve(job.outputPath);
+      if (job.status !== "ready" || !output || !output.startsWith(`${root}${sep}`) || !output.endsWith(".pptx")) {
+        throw Object.assign(new Error("PPT 文件尚未就绪"), { status: 404 });
+      }
+      const info = await stat(output);
+      response.writeHead(200, {
+        "content-type": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "content-length": info.size,
+        "content-disposition": `attachment; filename="presentation-${job.id}.pptx"`,
+        "x-content-type-options": "nosniff",
+      });
+      createReadStream(output).pipe(response);
+      return;
+    }
     if (method === "POST" && parts[3] === "meetings" && parts.length === 4) {
       if (!await agent.getSession(id)) { json(response, 404, { error: "会话不存在" }); return; }
       const name = decodeURIComponent(request.headers["x-file-name"] || "会议原文.txt");
@@ -165,7 +220,13 @@ async function route(request, response) {
       return;
     }
     if (parts[3] === "meetings" && /^[0-9a-f-]{36}$/i.test(parts[4] || "") && parts[5] === "submit" && parts.length === 6 && method === "POST") {
-      json(response, 202, await meetingWorkflow.submit(id, parts[4]));
+      json(response, 202, await meetingWorkflow.submit(id, parts[4], await readJson(request)));
+      return;
+    }
+    if (parts[3] === "meetings" && /^[0-9a-f-]{36}$/i.test(parts[4] || "") && parts[5] === "email" && parts[6] === "undelivered" && parts.length === 7 && method === "POST") {
+      const { confirmedNotDelivered } = await readJson(request);
+      if (confirmedNotDelivered !== true) throw Object.assign(new Error("请先确认已经核查收件箱，邮件未送达"), { status: 400 });
+      json(response, 200, { email: await meetingWorkflow.acknowledgeUndelivered(id, parts[4]) });
       return;
     }
     if (parts[3] === "meetings" && /^[0-9a-f-]{36}$/i.test(parts[4] || "") && parts[5] === "email" && parts[6] === "send" && parts.length === 7 && method === "POST") {

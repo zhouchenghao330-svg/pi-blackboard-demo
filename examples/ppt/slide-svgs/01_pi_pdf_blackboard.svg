@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" lang="zh-CN" font-family="Microsoft YaHei" data-pptx-page-role="content">
+  <rect id="page-field" data-pptx-role="background" x="0" y="0" width="1280" height="720" fill="#FFFFFF" />
+  <rect id="page-zone-column" data-pptx-role="decoration" x="0" y="0" width="40" height="720" fill="#0F2B46" />
+
+  <g id="header" data-pptx-bounds="80 44 1140 104">
+    <text x="80" y="88" font-size="16" fill="#64748B" letter-spacing="3">外脑 DEMO · 能力一</text>
+    <text x="80" y="132" font-size="40" font-weight="bold" fill="#0F172A">Pi 对话与 PDF Blackboard</text>
+    <line x1="80" y1="150" x2="1200" y2="150" stroke="#CBD5E1" stroke-width="1" />
+  </g>
+
+  <g id="dialogue-zone" data-pptx-bounds="80 176 460 314">
+    <text x="80" y="196" font-size="18" fill="#64748B">对话式交互入口</text>
+    <use data-icon="tabler-outline/message-2" x="80" y="218" width="40" height="40" fill="#1565C0" stroke-width="2" />
+    <text x="134" y="248" font-size="30" fill="#0F172A">用自然语言对话</text>
+    <text x="80" y="300" font-size="24" fill="#334155">向 Pi 提问、下达任务，<tspan x="80" dy="42">由对话驱动后续能力。</tspan></text>
+    <text x="80" y="392" font-size="18" fill="#64748B">对话是唯一的操作起点</text>
+  </g>
+
+  <g id="blackboard-field" data-pptx-bounds="600 190 600 430">
+    <g id="blackboard-header" data-pptx-bounds="600 190 600 90">
+      <use data-icon="tabler-outline/file-text" x="600" y="196" width="40" height="40" fill="#0F2B46" stroke-width="2" />
+      <text x="654" y="226" font-size="30" fill="#0F172A">PDF Blackboard 索引</text>
+      <text x="600" y="264" font-size="18" fill="#64748B">视觉阅读 PDF，生成可回查的导航索引</text>
+    </g>
+    <rect id="blackboard-frame" x="600" y="282" width="600" height="338" fill="none" stroke="#CBD5E1" stroke-width="1" />
+    <g id="cap-visual-index" data-pptx-bounds="628 300 544 88">
+      <use data-icon="tabler-outline/book" x="628" y="316" width="32" height="32" fill="#1565C0" stroke-width="2" />
+      <text x="680" y="340" font-size="24" fill="#0F172A">视觉阅读生成导航索引</text>
+      <text x="628" y="374" font-size="18" fill="#64748B">模型直接看页面，输出可跳转的章节索引</text>
+    </g>
+    <g id="cap-page-review" data-pptx-bounds="628 396 544 88">
+      <use data-icon="tabler-outline/eye" x="628" y="412" width="32" height="32" fill="#1565C0" stroke-width="2" />
+      <text x="680" y="436" font-size="24" fill="#0F172A">按页回看原页核实</text>
+      <text x="628" y="470" font-size="18" fill="#64748B">索引条目可回到对应原始页面核对</text>
+    </g>
+    <g id="cap-user-fix" data-pptx-bounds="628 492 544 88">
+      <use data-icon="tabler-outline/pencil" x="628" y="508" width="32" height="32" fill="#1565C0" stroke-width="2" />
+      <text x="680" y="532" font-size="24" fill="#0F172A">支持用户修正</text>
+      <text x="628" y="566" font-size="18" fill="#64748B">用户可直接修改索引结果</text>
+    </g>
+  </g>
+
+  <g id="flow-zone" data-pptx-bounds="80 490 460 130">
+    <text x="80" y="512" font-size="16" fill="#64748B" letter-spacing="2">连接关系</text>
+    <g id="p01-seq-chevron-1" data-pptx-authoring="preset" data-pptx-object="shape" data-pptx-prst="chevron" data-pptx-frame="80 532 210 54" fill="#0F2B46" stroke="none">
+      <path d="M 80 532 L 263 532 L 290 559 L 263 586 L 80 586 L 107 559 Z" />
+    </g>
+    <g id="p01-seq-chevron-2" data-pptx-authoring="preset" data-pptx-object="shape" data-pptx-prst="chevron" data-pptx-frame="272 532 210 54" fill="#1E4C7A" stroke="none">
+      <path d="M 272 532 L 455 532 L 482 559 L 455 586 L 272 586 L 299 559 Z" />
+    </g>
+    <text x="196" y="566" font-size="18" fill="#FFFFFF" text-anchor="middle">Pi 对话</text>
+    <text x="388" y="566" font-size="18" fill="#FFFFFF" text-anchor="middle">PDF Blackboard</text>
+  </g>
+
+  <g id="footer" data-pptx-bounds="80 656 1120 40" fill="#94A3B8" font-size="16">
+    <text x="80" y="680">外脑 Demo · 面向面试官的能力说明</text>
+    <text x="1200" y="680" text-anchor="end">1 / 2</text>
+  </g>
+</svg>

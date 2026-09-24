@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildBlackboard, parseJsonOutput, validateBatch, validateOverview } from "./ingest.mjs";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { buildBlackboard, parseJsonOutput, readEntries, validateBatch, validateOverview } from "./ingest.mjs";
 
 test("repairs an invalid JSON escape in a formula without changing its text", () => {
   assert.deepEqual(parseJsonOutput('{"formula":"t\\epsilon",}'), { formula: "t\\epsilon" });
@@ -65,4 +68,25 @@ test("overview sections and highlights only reference physical document pages", 
   for (const [sections, highlights] of [[[8], [3]], [[1], [0]], [[1.5], [3]], [[1], [999]]]) {
     assert.throws(() => validateOverview(note(sections, highlights), 7), /全文概述/);
   }
+});
+
+test("resume drops only a torn final JSONL record", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "blackboard-entries-"));
+  const path = join(directory, "entries.jsonl");
+  try {
+    await writeFile(path, '{"kind":"batch","batch":1}\n{"kind":"batch","batch":2');
+    assert.deepEqual(await readEntries(path), [{ kind: "batch", batch: 1 }]);
+    assert.equal(await readFile(path, "utf8"), '{"kind":"batch","batch":1}\n');
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("page numbers must be numeric and out-of-order checkpoints build in page order", () => {
+  const batch = { number: 1, seenPages: [1], overlapPages: [], newPages: [1] };
+  const note = (page) => ({ batch_summary: "", page_notes: [{ page, content_type: ["text"],
+    summary: "页", topics: [], anchors: [], key_facts: [] }], cross_page_links: [], overlap_additions: [], uncertainties: [] });
+  assert.throws(() => validateBatch(note("1"), batch, null), /页码不符/);
+  const first = { kind: "batch", batch: 1, newPages: [1], note: validateBatch(note(1), batch, null) };
+  const second = { kind: "batch", batch: 2, newPages: [2], note: validateBatch(note(2),
+    { number: 2, seenPages: [1, 2], overlapPages: [1], newPages: [2] }, null) };
+  assert.deepEqual(buildBlackboard({ pageCount: 2, name: "test.pdf" }, [second, first]).pageMap.map((page) => page.page), [1, 2]);
 });

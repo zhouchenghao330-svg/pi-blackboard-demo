@@ -1,0 +1,83 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" lang="zh-CN" font-family="Microsoft YaHei" data-pptx-page-role="content">
+  <rect id="page-field" data-pptx-role="background" x="0" y="0" width="1280" height="720" fill="#FFFFFF" />
+  <rect id="page-zone-column" data-pptx-role="decoration" x="0" y="0" width="40" height="720" fill="#0F2B46" />
+
+  <g id="header" data-pptx-bounds="80 44 1140 104">
+    <text x="80" y="88" font-size="16" fill="#64748B" letter-spacing="3">外脑 DEMO · 能力二</text>
+    <text x="80" y="132" font-size="40" font-weight="bold" fill="#0F172A">会议分析与邮件确认</text>
+    <line x1="80" y1="150" x2="1200" y2="150" stroke="#CBD5E1" stroke-width="1" />
+  </g>
+
+  <g id="sequence-strip" data-pptx-bounds="80 186 720 90">
+    <g id="p02-seq-plate-1" data-pptx-authoring="preset" data-pptx-object="shape" data-pptx-prst="homePlate" data-pptx-frame="80 206 214 52" fill="#0F2B46" stroke="none">
+      <path d="M 80 206 L 268 206 L 294 232 L 268 258 L 80 258 Z" />
+    </g>
+    <g id="p02-seq-plate-2" data-pptx-authoring="preset" data-pptx-object="shape" data-pptx-prst="homePlate" data-pptx-frame="280 206 214 52" fill="#1E4C7A" stroke="none">
+      <path d="M 280 206 L 468 206 L 494 232 L 468 258 L 280 258 Z" />
+    </g>
+    <g id="p02-seq-plate-3" data-pptx-authoring="preset" data-pptx-object="shape" data-pptx-prst="homePlate" data-pptx-frame="480 206 214 52" fill="#2E7BB8" stroke="none">
+      <path d="M 480 206 L 668 206 L 694 232 L 668 258 L 480 258 Z" />
+    </g>
+    <text x="163" y="238" font-size="18" fill="#FFFFFF" text-anchor="middle">会议文本</text>
+    <text x="363" y="238" font-size="18" fill="#FFFFFF" text-anchor="middle">分析</text>
+    <text x="563" y="238" font-size="18" fill="#FFFFFF" text-anchor="middle">用户确认</text>
+    <text x="712" y="238" font-size="18" fill="#64748B">发送</text>
+    <line x1="712" y1="232" x2="760" y2="232" stroke="#94A3B8" stroke-width="2" stroke-dasharray="8,4" marker-end="url(#arrowHead)" />
+  </g>
+
+  <g id="analysis-outputs" data-pptx-bounds="80 300 610 344">
+    <use data-icon="tabler-outline/file-analytics" x="80" y="304" width="32" height="32" fill="#0F2B46" stroke-width="2" />
+    <text x="126" y="328" font-size="24" fill="#0F172A">分析输出</text>
+    <g id="out-facts" data-pptx-bounds="80 350 290 140">
+      <rect x="80" y="350" width="290" height="140" fill="#F1F5F9" />
+      <use data-icon="tabler-outline/list-search" x="104" y="374" width="32" height="32" fill="#1565C0" stroke-width="2" />
+      <text x="150" y="398" font-size="24" fill="#0F172A">事实</text>
+      <text x="104" y="440" font-size="18" fill="#64748B">整理会议中已明确</text>
+      <text x="104" y="468" font-size="18" fill="#64748B">陈述的内容</text>
+    </g>
+    <g id="out-risks" data-pptx-bounds="400 350 290 140">
+      <rect x="400" y="350" width="290" height="140" fill="#F1F5F9" />
+      <use data-icon="tabler-outline/alert-triangle" x="424" y="374" width="32" height="32" fill="#B45309" stroke-width="2" />
+      <text x="470" y="398" font-size="24" fill="#0F172A">风险</text>
+      <text x="424" y="440" font-size="18" fill="#64748B">标出会议中出现的</text>
+      <text x="424" y="468" font-size="18" fill="#64748B">风险点</text>
+    </g>
+    <g id="out-todos" data-pptx-bounds="80 510 290 134">
+      <rect x="80" y="510" width="290" height="134" fill="#F1F5F9" />
+      <use data-icon="tabler-outline/checkbox" x="104" y="534" width="32" height="32" fill="#1565C0" stroke-width="2" />
+      <text x="150" y="558" font-size="24" fill="#0F172A">待办</text>
+      <text x="104" y="600" font-size="18" fill="#64748B">汇总需要跟进的<tspan x="104" dy="28">事项</tspan></text>
+    </g>
+    <g id="out-mail" data-pptx-bounds="400 510 290 134">
+      <rect x="400" y="510" width="290" height="134" fill="#F1F5F9" />
+      <use data-icon="tabler-outline/mail-check" x="424" y="534" width="32" height="32" fill="#1565C0" stroke-width="2" />
+      <text x="470" y="558" font-size="24" fill="#0F172A">邮件草稿</text>
+      <text x="424" y="600" font-size="18" fill="#64748B">基于会议分析生成<tspan x="424" dy="28">可发送的草稿</tspan></text>
+    </g>
+  </g>
+
+  <g id="confirm-gate" data-pptx-bounds="740 300 460 350">
+    <g id="gate-top-rule">
+      <rect x="740" y="300" width="460" height="6" fill="#1565C0" />
+    </g>
+    <use data-icon="tabler-outline/mail-check" x="740" y="330" width="40" height="40" fill="#0F2B46" stroke-width="2" />
+    <text x="794" y="362" font-size="30" fill="#0F172A">确认后才发送</text>
+    <text x="740" y="412" font-size="24" fill="#334155">邮件草稿只作为待确认结果，<tspan x="740" dy="40">经用户确认之后才发送出去。</tspan></text>
+    <line x1="740" y1="492" x2="1200" y2="492" stroke="#CBD5E1" stroke-width="1" />
+    <use data-icon="tabler-outline/send" x="740" y="520" width="32" height="32" fill="#64748B" stroke-width="2" />
+    <text x="786" y="544" font-size="24" fill="#64748B">发送</text>
+    <text x="740" y="592" font-size="18" fill="#64748B">草稿在用户确认之前不会发出</text>
+    <line x1="786" y1="556" x2="786" y2="576" stroke="#CBD5E1" stroke-width="2" stroke-dasharray="4,4" />
+  </g>
+
+  <g id="footer" data-pptx-bounds="80 656 1120 40" fill="#94A3B8" font-size="16">
+    <text x="80" y="680">外脑 Demo · 面向面试官的能力说明</text>
+    <text x="1200" y="680" text-anchor="end">2 / 2</text>
+  </g>
+
+  <defs>
+    <marker id="arrowHead" markerWidth="10" markerHeight="10" refX="8" refY="3.5" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 8 3.5 L 0 7 Z" fill="#94A3B8" />
+    </marker>
+  </defs>
+</svg>

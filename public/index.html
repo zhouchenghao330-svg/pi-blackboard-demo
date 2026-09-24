@@ -55,6 +55,7 @@
           </div>
           <div class="topbar-right">
             <button class="board-toggle" id="boardToggle" type="button" aria-label="切换 Blackboard 面板">Blackboard</button>
+            <button class="board-toggle" id="meetingToggle" type="button" aria-label="切换会议面板">会议</button>
             <span class="connection-pill" id="connectionPill"><span></span><span id="connectionText">连接中</span></span>
             <span class="model-pill" id="modelPill">模型加载中</span>
           </div>
@@ -68,7 +69,7 @@
                 <div class="empty-symbol" aria-hidden="true"><span></span><span></span><span></span></div>
                 <p class="empty-kicker">你的工作思考空间</p>
                 <h2>从一个问题开始。</h2>
-                <p class="empty-description">上传 PDF 建立可回查的背景索引，或直接开始对话。对话和文档会自动保存。</p>
+                <p class="empty-description">上传 PDF 建立背景索引，上传会议 TXT 后可在后台分析风险、待办与邮件草稿。</p>
                 <div class="starter-grid">
                   <button class="starter-card" data-prompt="帮我梳理一个项目启动会需要确认的问题。" type="button">
                     <span class="starter-number">01</span>
@@ -94,11 +95,11 @@
                 <textarea id="messageInput" rows="1" placeholder="输入消息，开始对话…" maxlength="12000"></textarea>
                 <div class="composer-actions">
                   <div class="composer-actions-left">
-                    <button class="attach-button" id="attachButton" type="button" aria-label="添加图片或 PDF" title="添加图片或 PDF">
+                    <button class="attach-button" id="attachButton" type="button" aria-label="添加图片、PDF 或会议 TXT" title="添加图片、PDF 或会议 TXT">
                       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 11.5 12 20a6 6 0 0 1-8.5-8.5l9-9a4 4 0 0 1 5.7 5.7l-9.1 9.1a2 2 0 0 1-2.8-2.8l8.4-8.4" /></svg>
                     </button>
-                    <input id="imageInput" type="file" accept="image/png,image/jpeg,image/webp,image/gif,application/pdf,.pdf" multiple hidden />
-                    <span class="composer-hint">图片或 PDF</span>
+                    <input id="imageInput" type="file" accept="image/png,image/jpeg,image/webp,image/gif,application/pdf,.pdf,text/plain,.txt" multiple hidden />
+                    <span class="composer-hint">图片、PDF 或会议 TXT</span>
                     <label class="thinking-control" for="thinkingSelect">
                       <span>思考强度</span>
                       <select id="thinkingSelect" aria-label="思考强度" disabled>
@@ -137,6 +138,12 @@
           <div class="board-content" id="boardContent">
             <div class="board-empty"><div class="board-empty-icon">▤</div><strong>还没有文档</strong><p>在对话框上传 PDF，Agent 会生成带页码的 Blackboard。</p></div>
           </div>
+        </aside>
+        <aside class="meeting-panel" id="meetingPanel" aria-label="会议分析">
+          <div class="meeting-header"><span class="board-eyebrow">MEETING WORKFLOW</span><h2>会议工作台</h2></div>
+          <p class="board-subtitle">会议只依据 TXT 分析。风险与待办可按原文行号核对。</p>
+          <div class="meeting-list" id="meetingList"></div>
+          <div class="meeting-content" id="meetingContent"><div class="board-empty"><strong>还没有会议</strong><p>在对话框上传会议 TXT，Agent 会提交后台分析。</p></div></div>
         </aside>
         </div>
       </main>

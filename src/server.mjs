@@ -5,6 +5,8 @@ import { fileURLToPath } from "node:url";
 import { createAgentService } from "./agent-service.mjs";
 import { configurePi } from "./configure-pi.mjs";
 import { createDocumentStore } from "./document-store.mjs";
+import { createMeetingStore } from "./meeting-store.mjs";
+import { createMeetingWorkflow } from "./meeting-workflow.mjs";
 
 const dataDir = process.env.DEMO_DATA_DIR || "/data";
 const agentDir = process.env.PI_CODING_AGENT_DIR || join(dataDir, "pi-agent");
@@ -14,7 +16,11 @@ await Promise.all([
 ]);
 const configuredModel = await configurePi();
 const documents = createDocumentStore(dataDir);
-const agent = await createAgentService({ dataDir, agentDir, modelId: configuredModel.modelId, documents });
+const meetings = createMeetingStore(dataDir);
+const meetingWorkflow = await createMeetingWorkflow({ store: meetings, agentDir, modelId: configuredModel.modelId });
+const agent = await createAgentService({ dataDir, agentDir, modelId: configuredModel.modelId, documents, meetings, meetingWorkflow });
+meetingWorkflow.setNotifier(agent.notifyMeeting);
+await meetingWorkflow.recover();
 const publicDir = fileURLToPath(new URL("../public/", import.meta.url));
 const port = Number(process.env.PORT || 3000);
 
@@ -54,11 +60,15 @@ function parsePrompt(body) {
   const text = typeof body?.text === "string" ? body.text.trim() : "";
   const inputImages = body?.images ?? [];
   const files = body?.files ?? [];
+  const meetingIds = body?.meetings ?? [];
   if (!Array.isArray(files) || files.length > 3 || files.some((id) => typeof id !== "string" || !/^[0-9a-f-]{36}$/i.test(id))) {
     throw Object.assign(new Error("每次最多附加 3 份已上传的 PDF"), { status: 400 });
   }
   if (!Array.isArray(inputImages) || inputImages.length > 3) {
     throw Object.assign(new Error("每次最多附加 3 张图片"), { status: 400 });
+  }
+  if (!Array.isArray(meetingIds) || meetingIds.length > 3 || meetingIds.some((id) => typeof id !== "string" || !/^[0-9a-f-]{36}$/i.test(id))) {
+    throw Object.assign(new Error("每次最多附加 3 份会议 TXT"), { status: 400 });
   }
   const images = inputImages.map((image) => {
     if (
@@ -72,10 +82,10 @@ function parsePrompt(body) {
     }
     return { type: "image", mimeType: image.mimeType, data: image.data };
   });
-  if ((!text && images.length === 0 && files.length === 0) || text.length > 12_000) {
+  if ((!text && images.length === 0 && files.length === 0 && meetingIds.length === 0) || text.length > 12_000) {
     throw Object.assign(new Error("请输入不超过 12000 字的消息"), { status: 400 });
   }
-  return { text: text || (files.length ? "请解析上传的 PDF 并建立 Blackboard。" : "请描述这些图片。"), images, files };
+  return { text: text || (meetingIds.length ? "请提交会议 TXT 分析任务。" : files.length ? "请解析上传的 PDF 并建立 Blackboard。" : "请描述这些图片。"), images, files, meetingIds };
 }
 
 async function route(request, response) {
@@ -108,6 +118,24 @@ async function route(request, response) {
       json(response, session ? 200 : 404, session ? { session } : { error: "会话不存在" });
       return;
     }
+    if (method === "GET" && parts[3] === "events" && parts.length === 4) {
+      if (!await agent.getSession(id)) { json(response, 404, { error: "会话不存在" }); return; }
+      response.writeHead(200, {
+        "content-type": "text/event-stream; charset=utf-8",
+        "cache-control": "no-store, no-transform",
+        "connection": "keep-alive",
+        "x-content-type-options": "nosniff",
+      });
+      response.write("data: {\"type\":\"ready\"}\n\n");
+      const unsubscribe = await agent.subscribeEvents(id, (event) => {
+        if (!response.destroyed) response.write(`data: ${JSON.stringify(event)}\n\n`);
+      });
+      const heartbeat = setInterval(() => {
+        if (!response.destroyed) response.write(": keep-alive\n\n");
+      }, 15000);
+      response.on("close", () => { clearInterval(heartbeat); unsubscribe(); });
+      return;
+    }
     if (method === "POST" && parts[3] === "abort" && parts.length === 4) {
       json(response, 200, { aborted: await agent.abort(id) });
       return;
@@ -115,6 +143,39 @@ async function route(request, response) {
     if (method === "GET" && parts[3] === "documents" && parts.length === 4) {
       if (!await agent.getSession(id)) { json(response, 404, { error: "会话不存在" }); return; }
       json(response, 200, { documents: await documents.list(id) });
+      return;
+    }
+    if (method === "GET" && parts[3] === "meetings" && parts.length === 4) {
+      if (!await agent.getSession(id)) { json(response, 404, { error: "会话不存在" }); return; }
+      const items = await meetings.list(id);
+      json(response, 200, { meetings: items.map(({ rawText, ...item }) => item) });
+      return;
+    }
+    if (method === "POST" && parts[3] === "meetings" && parts.length === 4) {
+      if (!await agent.getSession(id)) { json(response, 404, { error: "会话不存在" }); return; }
+      const name = decodeURIComponent(request.headers["x-file-name"] || "会议原文.txt");
+      const meetingTime = request.headers["x-meeting-time"] || null;
+      const meeting = await meetings.upload(id, request, name, meetingTime);
+      json(response, 201, { meeting: { ...meeting, rawText: undefined } });
+      return;
+    }
+    if (parts[3] === "meetings" && /^[0-9a-f-]{36}$/i.test(parts[4] || "") && parts.length === 5 && method === "GET") {
+      const meeting = await meetings.requireMeeting(id, parts[4]);
+      json(response, 200, { meeting });
+      return;
+    }
+    if (parts[3] === "meetings" && /^[0-9a-f-]{36}$/i.test(parts[4] || "") && parts[5] === "submit" && parts.length === 6 && method === "POST") {
+      json(response, 202, await meetingWorkflow.submit(id, parts[4]));
+      return;
+    }
+    if (parts[3] === "meetings" && /^[0-9a-f-]{36}$/i.test(parts[4] || "") && parts[5] === "email" && parts[6] === "send" && parts.length === 7 && method === "POST") {
+      const { recipient } = await readJson(request);
+      json(response, 200, await meetingWorkflow.send(id, parts[4], recipient));
+      return;
+    }
+    if (parts[3] === "meetings" && /^[0-9a-f-]{36}$/i.test(parts[4] || "") && parts[5] === "email" && parts[6] === "draft" && parts.length === 7 && method === "PUT") {
+      const { subject, body } = await readJson(request);
+      json(response, 200, { email: await meetingWorkflow.updateDraft(id, parts[4], subject, body) });
       return;
     }
     if (method === "POST" && parts[3] === "documents" && parts.length === 4) {
@@ -164,14 +225,14 @@ async function route(request, response) {
         return;
       }
       const body = await readJson(request);
-      const { text, images, files } = parsePrompt(body);
+      const { text, images, files, meetingIds } = parsePrompt(body);
       const session = await agent.getSession(id);
       if (!session) {
         json(response, 404, { error: "会话不存在" });
         return;
       }
       if (session.running) {
-        json(response, 409, { error: "当前会话正在生成回答" });
+        json(response, 202, await agent.queueUserInput(id, text, images, files, meetingIds));
         return;
       }
       response.writeHead(200, {
@@ -183,7 +244,7 @@ async function route(request, response) {
         if (!response.destroyed) response.write(`${JSON.stringify(event)}\n`);
       };
       try {
-        await agent.prompt(id, text, images, files, body.thinkingLevel, send);
+        await agent.prompt(id, text, images, files, meetingIds, body.thinkingLevel, send);
         send({ type: "done" });
       } catch (error) {
         send({ type: "error", message: error instanceof Error ? error.message : String(error) });

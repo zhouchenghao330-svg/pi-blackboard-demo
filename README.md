@@ -1,6 +1,6 @@
 # AI 外脑 Demo
 
-当前可运行的部分是单页对话工作台：Pi SDK 驱动的会话、流式回答、Markdown 展示、图片与 PDF 输入、思考强度与思考内容展示、停止生成和历史会话恢复。上传 PDF 后，主 Agent 调用 `ingest_pdf` 按页建立 Blackboard；右侧展示解析进度、文档概览、主题导航、关键线索、逐页索引和跨页连接。页面可搜索模型笔记及 PDF 原生文本层，按需打开高清页图，追加人工修正。`get_blackboard` 让 Agent 获取最新索引与修正，`search_pdf_text` 定位文本，`read_pdf_pages` 按物理页码核验原图。页面由原生 HTML、CSS 和 JavaScript 实现，服务与 PDF 页渲染工具运行在同一个容器内。会议分析、邮件和 PPT 仍是后续业务功能。
+当前可运行的部分是单页对话工作台：Pi SDK 驱动的会话、流式回答、Markdown 展示、图片、PDF 与会议 TXT 输入、思考强度与思考内容展示、停止生成和历史会话恢复。上传 PDF 后，主 Agent 调用 `ingest_pdf` 按页建立 Blackboard；右侧展示解析进度、文档概览、主题导航、关键线索、逐页索引和跨页连接。页面可搜索模型笔记及 PDF 原生文本层，按需打开高清页图，追加人工修正。`get_blackboard` 让 Agent 获取最新索引与修正，`search_pdf_text` 定位文本，`read_pdf_pages` 按物理页码核验原图。上传会议 TXT 后，主 Agent 调用 `submit_meeting_analysis` 立即提交后台任务，会议面板展示进度、原文行号证据、风险、明确待办、建议待办与可编辑邮件草稿。完成通知是隐藏的内部 follow-up，主 Agent 再调用 `get_meeting_analysis`；用户消息以 steer 优先进入当前任务。若需结合 PDF 修改邮件，主 Agent 可调用 `revise_meeting_email` 保存新草稿并重新给用户确认。邮件须用户确认收件人后才调用 `confirm_meeting_email` 或点击面板发送。PPT 仍是后续功能。
 
 ## 启动
 
@@ -17,4 +17,6 @@ curl http://127.0.0.1:3000/health
 
 思考强度按会话保存，页面提供关闭、极低、低、中、高；回答中的思考内容可展开。默认适配 Qwen + vLLM：`DEMO_MODEL_THINKING_FORMAT=qwen-chat-template` 控制思考开关，`DEMO_MODEL_THINKING_BUDGET_FIELD=thinking_token_budget` 让不同档位使用 Pi 的不同思考 token 预算。换其他模型或服务时，需按其接口调整这两个配置；不支持思考的模型设置 `DEMO_MODEL_REASONING=false`。
 
-容器内的 `/data/uploads`、`/data/outputs` 和 `/data/pi-agent` 由 Compose 的 `demo_data` 卷持久化，Pi 会话位于 `/data/sessions`。PDF 页渲染工具 `pdftoppm` 和 `pdfinfo` 已安装在容器内。
+容器内的 `/data/uploads`、`/data/outputs`、`/data/meetings` 和 `/data/pi-agent` 由 Compose 的 `demo_data` 卷持久化，Pi 会话位于 `/data/sessions`。PDF 页渲染工具 `pdftoppm` 和 `pdfinfo` 已安装在容器内。
+
+会议分析只读取 TXT，不自动读取 PDF；主 Agent 可在取得会议结果后另行核验背景。TXT 默认最多 512 KB、40000 字。行号是原文物理行号；模型风险判断仍需人工核对。无明显风险时不生成风险邮件。邮件真实发送需要在 `.env` 配置 `MEETING_SMTP_HOST`、`MEETING_SMTP_PORT`、`MEETING_SMTP_FROM`，需要认证时还要配置 `MEETING_SMTP_USER` 和 `MEETING_SMTP_PASS`。未配置 SMTP 时仍可查看和编辑草稿，发送会明确报错。`sent` 表示 SMTP 服务器已接受，不能保证对方收件箱已收到。流程与恢复规则见 [会议设计](docs/meeting-workflow.md)。

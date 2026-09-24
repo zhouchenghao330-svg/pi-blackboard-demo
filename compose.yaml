@@ -8,6 +8,7 @@ services:
       PORT: "3000"
       PI_CODING_AGENT_DIR: /data/pi-agent
       DEMO_DATA_DIR: /data
+      MAX_PDF_PAGES: ${MAX_PDF_PAGES:-100}
       DEMO_MODEL_BASE_URL: ${DEMO_MODEL_BASE_URL:-}
       DEMO_MODEL_ID: ${DEMO_MODEL_ID:-}
       DEMO_MODEL_API: ${DEMO_MODEL_API:-openai-completions}
